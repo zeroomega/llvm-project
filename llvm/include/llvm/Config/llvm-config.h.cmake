@@ -128,6 +128,8 @@
 
 /* Define if the Xtensa target is built in */
 #cmakedefine01 LLVM_HAS_XTENSA_TARGET
+/* Define if this is Fuchsia platform */
+#cmakedefine LLVM_ON_FUCHSIA ${LLVM_ON_FUCHSIA}
 
 /* Define if this is Unixish platform */
 #cmakedefine LLVM_ON_UNIX ${LLVM_ON_UNIX}

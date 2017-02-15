@@ -18,7 +18,7 @@
 #include "llvm/Support/Parallel.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/TimeProfiler.h"
-#if LLVM_ON_UNIX
+#if defined(LLVM_ON_UNIX) || defined(LLVM_ON_FUCHSIA)
 #include <unistd.h>
 #endif
 #include <thread>

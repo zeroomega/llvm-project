@@ -21,6 +21,9 @@
 #include <chrono>
 #include <optional>
 #include <system_error>
+#if defined(LLVM_ON_FUCHSIA)
+#include <zircon/types.h>
+#endif
 
 namespace llvm {
 class BitVector;
@@ -28,7 +31,7 @@ namespace sys {
 
   /// This is the OS-specific separator for PATH like environment variables:
   // a colon on Unix or a semicolon on Windows.
-#if defined(LLVM_ON_UNIX)
+#if defined(LLVM_ON_UNIX) || defined(LLVM_ON_FUCHSIA)
   const char EnvPathSeparator = ':';
 #elif defined (_WIN32)
   const char EnvPathSeparator = ';';
@@ -37,6 +40,9 @@ namespace sys {
 #if defined(_WIN32)
   typedef unsigned long procid_t; // Must match the type of DWORD on Windows.
   typedef void *process_t;        // Must match the type of HANDLE on Windows.
+#elif defined(LLVM_ON_FUCHSIA)
+  typedef zx_koid_t procid_t;
+  typedef zx_handle_t process_t;
 #else
   typedef ::pid_t procid_t;
   typedef procid_t process_t;

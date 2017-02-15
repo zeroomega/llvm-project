@@ -273,6 +273,9 @@ static bool printMarkupStackTrace(StringRef Argv0, void **StackTrace, int Depth,
 }
 
 // Include the platform-specific parts of this class.
+#ifdef LLVM_ON_FUCHSIA
+#include "Fuchsia/Signals.inc"
+#endif
 #ifdef LLVM_ON_UNIX
 #include "Unix/Signals.inc"
 #endif

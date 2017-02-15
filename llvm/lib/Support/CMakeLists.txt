@@ -41,7 +41,7 @@ if( MSVC OR MINGW )
   # libuuid required for FOLDERID_Profile usage in lib/Support/Windows/Path.inc.
   # advapi32 required for CryptAcquireContextW in lib/Support/Windows/Path.inc.
   set(system_libs ${system_libs} psapi shell32 ole32 uuid advapi32 ws2_32)
-elseif( CMAKE_HOST_UNIX )
+elseif( CMAKE_HOST_UNIX OR FUCHSIA)
   if( HAVE_LIBRT )
     set(system_libs ${system_libs} rt)
   endif()
@@ -68,7 +68,7 @@ elseif( CMAKE_HOST_UNIX )
     set(system_libs ${system_libs} kstat socket)
   endif()
   if( FUCHSIA )
-    set(system_libs ${system_libs} zircon)
+    set(system_libs ${system_libs} fdio zircon)
   endif()
   if ( HAIKU )
     add_compile_definitions(_BSD_SOURCE)
@@ -280,6 +280,7 @@ add_llvm_component_library(LLVMSupport
   Watchdog.cpp
 
   ADDITIONAL_HEADER_DIRS
+  Fuchsia
   Unix
   Windows
   ${LLVM_MAIN_INCLUDE_DIR}/llvm/ADT

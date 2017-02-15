@@ -99,6 +99,9 @@ void sys::printArg(raw_ostream &OS, StringRef Arg, bool Quote) {
 }
 
 // Include the platform-specific parts of this class.
+#ifdef LLVM_ON_FUCHSIA
+#include "Fuchsia/Program.inc"
+#endif
 #ifdef LLVM_ON_UNIX
 #include "Unix/Program.inc"
 #endif
