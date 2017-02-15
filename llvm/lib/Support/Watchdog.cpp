@@ -14,6 +14,9 @@
 #include "llvm/Config/llvm-config.h"
 
 // Include the platform-specific parts of this class.
+#ifdef LLVM_ON_FUCHSIA
+#include "Fuchsia/Watchdog.inc"
+#endif
 #ifdef LLVM_ON_UNIX
 #include "Unix/Watchdog.inc"
 #endif

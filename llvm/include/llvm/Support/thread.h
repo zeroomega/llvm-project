@@ -29,9 +29,15 @@ typedef PVOID HANDLE;
 
 #include <thread>
 
+#ifdef LLVM_ON_FUCHSIA
+namespace {
+  #include <threads.h>
+}
+#endif
+
 namespace llvm {
 
-#if LLVM_ON_UNIX || _WIN32
+#if LLVM_ON_FUCHSIA || LLVM_ON_UNIX || _WIN32
 
 /// LLVM thread following std::thread interface with added constructor to
 /// specify stack size.
@@ -54,6 +60,15 @@ public:
   template <typename CalleeTuple> static void *ThreadProxy(void *Ptr) {
     GenericThreadProxy<CalleeTuple>(Ptr);
     return nullptr;
+  }
+#elif LLVM_ON_FUCHSIA
+  using native_handle_type = thrd_t;
+  using id = thrd_t;
+  using start_routine_type = int(*)(void*);
+
+  template <typename CalleeTuple> static int ThreadProxy(void *Ptr) {
+    GenericThreadProxy<CalleeTuple>(Ptr);
+    return 0;
   }
 #elif _WIN32
   using native_handle_type = HANDLE;
@@ -152,7 +167,7 @@ namespace this_thread {
 inline thread::id get_id() { return llvm_thread_get_current_id_impl(); }
 } // namespace this_thread
 
-#else // !LLVM_ON_UNIX && !_WIN32
+#else // !LLVM_ON_FUCHSIA && !LLVM_ON_UNIX && !_WIN32
 
 /// std::thread backed implementation of llvm::thread interface that ignores the
 /// stack size request.
@@ -205,7 +220,7 @@ namespace this_thread {
   inline thread::id get_id() { return std::this_thread::get_id(); }
 }
 
-#endif // LLVM_ON_UNIX || _WIN32
+#endif // LLVM_ON_FUCHSIA || LLVM_ON_UNIX || _WIN32
 
 } // namespace llvm
 

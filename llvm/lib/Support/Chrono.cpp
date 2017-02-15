@@ -26,7 +26,7 @@ static inline struct tm getStructTM(TimePoint<> TP) {
   struct tm Storage;
   std::time_t OurTime = toTimeT(TP);
 
-#if defined(LLVM_ON_UNIX)
+#if defined(LLVM_ON_FUCHSIA) || defined(LLVM_ON_UNIX)
   struct tm *LT = ::localtime_r(&OurTime, &Storage);
   assert(LT);
   (void)LT;
