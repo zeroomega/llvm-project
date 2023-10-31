@@ -33,6 +33,9 @@ namespace sys {
     MemoryBlock() : Address(nullptr), AllocatedSize(0) {}
     MemoryBlock(void *addr, size_t allocatedSize)
         : Address(addr), AllocatedSize(allocatedSize) {}
+    MemoryBlock(void *addr, size_t allocatedSize, unsigned flags)
+        : Address(addr), AllocatedSize(allocatedSize), Flags(flags) {}
+
     void *base() const { return Address; }
     /// The size as it was allocated. This is always greater or equal to the
     /// size that was originally requested.
