@@ -187,7 +187,7 @@ void llvm::sys::PrintStackTraceOnErrorSignal(StringRef Argv0,
 void llvm::sys::DisableSystemDialogsOnCrash() {}
 
 // The public API
-void llvm::sys::PrintStackTrace(raw_ostream &OS, int Depth);
+void llvm::sys::PrintStackTrace(raw_ostream &OS, int Depth) {};
 
 // The public API
 void llvm::sys::AddSignalHandler(llvm::sys::SignalHandlerCallback FnPtr, void *Cookie) {
@@ -235,6 +235,11 @@ static bool findModulesAndOffsets(void **StackTrace, int Depth,
                             Modules,    Offsets, MainExecutableName};
   dl_iterate_phdr(dl_iterate_phdr_cb, &data);
   return true;
+}
+
+static bool printMarkupContext(llvm::raw_ostream &OS,
+                               const char *MainExecutableName) {
+  return false;
 }
 
 /// This function registers a function to be called when the user "interrupts"

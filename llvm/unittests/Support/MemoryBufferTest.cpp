@@ -167,7 +167,7 @@ TEST_F(MemoryBufferTest, copy) {
   EXPECT_NE(nullptr, MBC3.get());
 }
 
-#if LLVM_ENABLE_THREADS
+#if defined(LLVM_ENABLE_THREADS) && !defined(LLVM_ON_FUCHSIA)
 TEST_F(MemoryBufferTest, createFromPipe) {
   sys::fs::file_t pipes[2];
 #if LLVM_ON_UNIX

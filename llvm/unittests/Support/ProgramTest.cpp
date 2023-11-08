@@ -33,6 +33,12 @@ void sleep_for(unsigned int seconds) {
 void sleep_for(unsigned int seconds) {
   Sleep(seconds * 1000);
 }
+#elif defined(LLVM_ON_FUCHSIA)
+#include <zircon/syscalls.h>
+#include <zircon/types.h>
+void sleep_for(unsigned int seconds) {
+  zx_nanosleep(zx_deadline_after(ZX_MSEC(seconds * 1000)));
+}
 #else
 #error sleep_for is not implemented on your platform.
 #endif
