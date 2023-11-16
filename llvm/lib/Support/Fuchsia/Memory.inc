@@ -80,7 +80,7 @@ Memory::allocateMappedMemory(size_t NumBytes,
 
   uintptr_t Addr;
   status = zx_vmar_map(
-      _zx_vmar_root_self(), 0, VMO, 0, MappingSize, Protect, &Addr);
+      _zx_vmar_root_self(), Protect, 0, VMO, 0, MappingSize, &Addr);
   if (status != ZX_OK) {
     if (NearBlock) //Try again without a near hint
       return allocateMappedMemory(NumBytes, nullptr, PFlags, EC);
@@ -146,7 +146,7 @@ Memory::protectMappedMemory(const MemoryBlock &M, unsigned Flags) {
 #endif
 
   zx_status_t status = zx_vmar_protect(
-      _zx_vmar_root_self(), (uintptr_t)Start, End - Start, Protect);
+      _zx_vmar_root_self(), Protect, (uintptr_t)Start, End - Start);
   if (status != ZX_OK)
     return std::error_code(status, std::generic_category());
 
