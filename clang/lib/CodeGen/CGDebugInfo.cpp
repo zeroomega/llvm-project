@@ -5522,8 +5522,9 @@ void CGDebugInfo::EmitGlobalVariable(llvm::GlobalVariable *Var,
     if (Expr.empty()) {
       if (auto const *InitVal = evaluateConstantInitializer(D))
         E = createConstantValueExpression(D, *InitVal);
-    } else
+    } else {
       E = DBuilder.createExpression(Expr);
+    }
 
     llvm::DINodeArray Annotations = CollectBTFDeclTagAnnotations(D);
     GVE = DBuilder.createGlobalVariableExpression(
