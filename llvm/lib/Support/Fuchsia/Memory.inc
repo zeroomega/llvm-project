@@ -137,9 +137,9 @@ Memory::protectMappedMemory(const MemoryBlock &M, unsigned Flags) {
 
 #if defined(__arm__) || defined(__aarch64__)
   // Certain ARM implementations treat icache clear instruction as a memory read,
-  // and CPU segfaults on trying to clear cache on !PROT_READ page.  Therefore we need
-  // to temporarily add PROT_READ for the sake of flushing the instruction caches.
-  if (InvalidateCache && !(Protect & PROT_READ)) {
+  // and CPU segfaults on trying to clear cache on !ZX_VM_FLAG_PERM_READ page.  Therefore we need
+  // to temporarily add ZX_VM_FLAG_PERM_READ for the sake of flushing the instruction caches.
+  if (InvalidateCache && !(Protect & ZX_VM_FLAG_PERM_READ)) {
     Memory::InvalidateInstructionCache(M.Address, M.AllocatedSize);
     InvalidateCache = false;
   }
