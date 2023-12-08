@@ -22,22 +22,28 @@
 
 namespace {
 
-int getZirconProtectionFlags(unsigned Flags) {
+zx_vm_option_t getZirconProtectionFlags(unsigned Flags) {
+  // Fuchsia doesn't support huge hint. Remove it
+  // if it is present.
+  if (Flags & llvm::sys::Memory::MF_HUGE_HINT)
+    Flags -= llvm::sys::Memory::MF_HUGE_HINT;
+  // Fuchsia require memory page is readable for WRITE and EXEC
+  // flags.
   switch (Flags) {
   case llvm::sys::Memory::MF_READ:
-    return ZX_VM_FLAG_PERM_READ;
+    return ZX_VM_PERM_READ;
   case llvm::sys::Memory::MF_WRITE:
-    return ZX_VM_FLAG_PERM_WRITE;
+    return ZX_VM_PERM_READ | ZX_VM_PERM_WRITE;
   case llvm::sys::Memory::MF_READ|llvm::sys::Memory::MF_WRITE:
-    return ZX_VM_FLAG_PERM_READ | ZX_VM_FLAG_PERM_WRITE;
+    return ZX_VM_PERM_READ | ZX_VM_PERM_WRITE;
   case llvm::sys::Memory::MF_READ|llvm::sys::Memory::MF_EXEC:
-    return ZX_VM_FLAG_PERM_READ | ZX_VM_FLAG_PERM_EXECUTE;
+    return ZX_VM_PERM_READ | ZX_VM_PERM_EXECUTE;
   case llvm::sys::Memory::MF_READ | llvm::sys::Memory::MF_WRITE |
       llvm::sys::Memory::MF_EXEC:
-    return ZX_VM_FLAG_PERM_READ | ZX_VM_FLAG_PERM_WRITE |
-        ZX_VM_FLAG_PERM_EXECUTE;
+    return ZX_VM_PERM_READ | ZX_VM_PERM_WRITE |
+        ZX_VM_PERM_EXECUTE;
   case llvm::sys::Memory::MF_EXEC:
-    return ZX_VM_FLAG_PERM_EXECUTE;
+    return ZX_VM_PERM_READ | ZX_VM_PERM_EXECUTE;
   default:
     llvm_unreachable("Illegal memory protection flag specified!");
   }
@@ -59,7 +65,13 @@ Memory::allocateMappedMemory(size_t NumBytes,
   if (NumBytes == 0)
     return MemoryBlock();
 
-  int Protect = getZirconProtectionFlags(PFlags);
+  if (PFlags & llvm::sys::Memory::MF_EXEC) {
+    // On Fuchsia, a page cannot be set to EXEC if the running process
+    // doesn't have ZX_VM_CAN_MAP_EXECUTE permission.
+    EC = std::error_code(ZX_ERR_ACCESS_DENIED ,std::generic_category());
+    return MemoryBlock();
+  }
+  zx_vm_option_t Protect = getZirconProtectionFlags(PFlags);
 
   // Use any near hint and the page size to set a page-aligned starting address
   uintptr_t Start = NearBlock ? reinterpret_cast<uintptr_t>(NearBlock->base()) +
