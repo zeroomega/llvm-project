@@ -140,9 +140,13 @@ Globals &getGlobals() {
 
 #include "Windows/DynamicLibrary.inc"
 
-#else
+#elif defined(LLVM_ON_UNIX)
 
 #include "Unix/DynamicLibrary.inc"
+
+#elif defined(LLVM_ON_FUCHSIA)
+
+#include "Fuchsia/DynamicLibrary.inc"
 
 #endif
 
