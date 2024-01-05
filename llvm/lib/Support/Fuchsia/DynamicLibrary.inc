@@ -25,14 +25,19 @@ DynamicLibrary::HandleSet::~HandleSet() {
 }
 
 void *DynamicLibrary::HandleSet::DLOpen(const char *File, std::string *Err) {
-  int i = 0, SeparatorIndex = -1;
-  while (File[i] != '\0') {
-    if (File[i] == '/')
-      SeparatorIndex = i;
-    i++;
+  const char *AdjustedFileName = File;
+  if (File != nullptr) {
+    int i = 0, SeparatorIndex = -1;
+    while (File[i] != '\0') {
+      if (File[i] == '/')
+        SeparatorIndex = i;
+      i++;
+    }
+    SeparatorIndex++;
+
+    AdjustedFileName = File + SeparatorIndex;
   }
-  SeparatorIndex++;
-  void *Handle = ::dlopen(File + SeparatorIndex, RTLD_LAZY|RTLD_GLOBAL);
+  void *Handle = ::dlopen(AdjustedFileName, RTLD_LAZY|RTLD_GLOBAL);
   if (!Handle) {
     if (Err) *Err = ::dlerror();
     return &DynamicLibrary::Invalid;
