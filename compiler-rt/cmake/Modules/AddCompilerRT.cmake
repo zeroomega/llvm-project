@@ -287,6 +287,7 @@ function(add_compiler_rt_runtime name type)
   endif()
 
   if(NOT libnames)
+    message(NOTICE "add_compiler_rt_runtime early return no libname on ${name}")
     return()
   endif()
 
@@ -444,6 +445,7 @@ function(add_compiler_rt_runtime name type)
   if(LIB_PARENT_TARGET)
     add_dependencies(${LIB_PARENT_TARGET} ${libnames})
   endif()
+  message(NOTICE "add_compiler_rt_runtime Reached end of function for ${name}")
 endfunction()
 
 # Compile and register compiler-rt tests.

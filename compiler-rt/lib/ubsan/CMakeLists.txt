@@ -170,6 +170,7 @@ else()
   endif()
 
   if(COMPILER_RT_HAS_UBSAN)
+    message(NOTICE "COMPILER_RT_HAS_UBSAN is ${COMPILER_RT_HAS_UBSAN}")
     add_compiler_rt_object_libraries(RTUbsan_standalone
       ARCHS ${UBSAN_SUPPORTED_ARCH}
       SOURCES ${UBSAN_STANDALONE_SOURCES}
@@ -177,6 +178,7 @@ else()
       CFLAGS ${UBSAN_STANDALONE_CFLAGS})
 
     # Standalone UBSan runtimes.
+    message(NOTICE "clang_rt.ubsan_standalone is STATIC for ${UBSAN_SUPPORTED_ARCH}")
     add_compiler_rt_runtime(clang_rt.ubsan_standalone
       STATIC
       ARCHS ${UBSAN_SUPPORTED_ARCH}
@@ -194,6 +196,7 @@ else()
       CFLAGS ${UBSAN_CFLAGS}
       PARENT_TARGET ubsan)
 
+    message(NOTICE "clang_rt.ubsan_standalone_cxx is STATIC for ${UBSAN_SUPPORTED_ARCH}")
     add_compiler_rt_runtime(clang_rt.ubsan_standalone_cxx
       STATIC
       ARCHS ${UBSAN_SUPPORTED_ARCH}
@@ -201,6 +204,7 @@ else()
       CFLAGS ${UBSAN_CXXFLAGS}
       PARENT_TARGET ubsan)
 
+    message(NOTICE "COMPILER_RT_HAS_VERSION_SCRIPT is ${COMPILER_RT_HAS_VERSION_SCRIPT}")
     if (COMPILER_RT_HAS_VERSION_SCRIPT)
       file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/dummy.cpp "")
       add_compiler_rt_object_libraries(RTUbsan_dynamic_version_script_dummy
@@ -224,7 +228,7 @@ else()
           ${CMAKE_CURRENT_BINARY_DIR}/dummy.cpp
           APPEND PROPERTY
           OBJECT_DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/clang_rt.ubsan_standalone-dynamic-${arch}.vers)
-
+        message(NOTICE "clang_rt.ubsan_standalone is SHARED for ${arch}")
         add_compiler_rt_runtime(clang_rt.ubsan_standalone
           SHARED
           ARCHS ${arch}

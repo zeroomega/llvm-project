@@ -179,10 +179,17 @@ set_target_properties(cxxabi_shared_objects
     COMPILE_FLAGS "${LIBCXXABI_COMPILE_FLAGS}"
     DEFINE_SYMBOL ""
 )
+
+message(NOTICE "libcxxabi cxxabi_shared_objects, CMAKE_POSITION_INDEPENDENT_CODE is ${CMAKE_POSITION_INDEPENDENT_CODE}")
 if (CMAKE_POSITION_INDEPENDENT_CODE OR NOT DEFINED CMAKE_POSITION_INDEPENDENT_CODE)
   set_target_properties(cxxabi_shared_objects PROPERTIES POSITION_INDEPENDENT_CODE ON) # must set manually because it's an object library
+  message(NOTICE "libcxxabi cxxabi_shared_objects POSITION_INDEPENDENT_CODE is set to ON")
 endif()
 target_compile_options(cxxabi_shared_objects PRIVATE "${LIBCXXABI_ADDITIONAL_COMPILE_FLAGS}")
+set(PIC_VALUE "")
+get_target_property(PIC_VALUE, cxxabi_shared_objects POSITION_INDEPENDENT_CODE)
+message(NOTICE "libcxxabi cxxabi_shared_objects, POSITION_INDEPENDENT_CODE is ${PIC_VALUE}")
+message(NOTICE "libcxxabi cxxabi_shared_objects LIBCXXABI_ADDITIONAL_COMPILE_FLAGS is ${LIBCXXABI_ADDITIONAL_COMPILE_FLAGS}")
 
 add_library(cxxabi_shared SHARED)
 set_target_properties(cxxabi_shared

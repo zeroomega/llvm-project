@@ -956,6 +956,8 @@ endif()
 
 cmake_dependent_option(COMPILER_RT_BUILD_CRT "Build crtbegin.o/crtend.o" ON "COMPILER_RT_HAS_CRT" OFF)
 
+message(NOTICE "COMPILER_RT_BUILD_CRT is ${COMPILER_RT_BUILD_CRT}")
+
 if (COMPILER_RT_BUILD_CRT)
   add_compiler_rt_component(crt)
 
@@ -973,6 +975,8 @@ if (COMPILER_RT_BUILD_CRT)
   if (COMPILER_RT_HAS_FCF_PROTECTION_FLAG)
     append_list_if(COMPILER_RT_ENABLE_CET -fcf-protection=full CRT_CFLAGS)
   endif()
+
+  message(NOTICE "BUILTIN_SUPPORTED_ARCH is ${BUILTIN_SUPPORTED_ARCH}")
 
   foreach(arch ${BUILTIN_SUPPORTED_ARCH})
     add_compiler_rt_runtime(clang_rt.crtbegin
