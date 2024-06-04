@@ -674,7 +674,7 @@ static void AttemptToFoldSymbolOffsetDifference(
     bool Reverse = false;
     if (FA == FB) {
       Reverse = SA.getOffset() < SB.getOffset();
-    } else if (!isa<MCDummyFragment>(FA)) {
+    } else if (!isa<MCDummyFragment>(FA) && !Asm->getSubsectionsViaSymbols()) {
       // Testing FA < FB is slow. Use setLayoutOrder to speed up computation.
       // The formal layout order will be finalized in MCAssembler::layout.
       if (FA->getLayoutOrder() == 0 || FB->getLayoutOrder()== 0) {
@@ -733,9 +733,13 @@ static void AttemptToFoldSymbolOffsetDifference(
     // If the previous loop does not find FA, FA must be a dummy fragment not in
     // the fragment list (which means SA is a pending label (see
     // flushPendingLabels)). In either case, we can resolve the difference.
-    assert(Found || isa<MCDummyFragment>(FA));
-    Addend += Reverse ? -Displacement : Displacement;
-    FinalizeFolding();
+    if (Found || isa<MCDummyFragment>(FA)) {
+      Addend += Reverse ? -Displacement : Displacement;
+      FinalizeFolding();
+      return;
+    }
+    // FIXME Figure out the full LTO build time regression.
+    assert(Asm->getSubsectionsViaSymbols());
   }
 }
 
