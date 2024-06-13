@@ -35,6 +35,7 @@
 #include <cassert>
 #include <chrono>
 #include <format>
+#include <iostream>
 
 #include "test_macros.h"
 #include "assert_macros.h"
@@ -71,29 +72,31 @@ constexpr std::chrono::year last{2100};
   return std::chrono::time_point_cast<std::chrono::seconds>(static_cast<std::chrono::local_days>(result)) + h + m + s;
 }
 
-static void assert_equal(const std::chrono::sys_info& lhs, const std::chrono::sys_info& rhs) {
+static void assert_equal_f(const std::chrono::sys_info& lhs, const std::chrono::sys_info& rhs, int line_num) {
   TEST_REQUIRE(lhs.begin == rhs.begin,
-               TEST_WRITE_CONCATENATED("\nBegin:\nExpected output ", lhs.begin, "\nActual output   ", rhs.begin, '\n'));
+               TEST_WRITE_CONCATENATED("\nBegin:\nExpected output ", lhs.begin, "\nActual output   ", rhs.begin, " LINE: ", line_num,  '\n'));
   TEST_REQUIRE(lhs.end == rhs.end,
-               TEST_WRITE_CONCATENATED("\nEnd:\nExpected output ", lhs.end, "\nActual output   ", rhs.end, '\n'));
+               TEST_WRITE_CONCATENATED("\nEnd:\nExpected output ", lhs.end, "\nActual output   ", rhs.end, " LINE: ", line_num, '\n'));
   TEST_REQUIRE(
       lhs.offset == rhs.offset,
-      TEST_WRITE_CONCATENATED("\nOffset:\nExpected output ", lhs.offset, "\nActual output   ", rhs.offset, '\n'));
+      TEST_WRITE_CONCATENATED("\nOffset:\nExpected output ", lhs.offset, "\nActual output   ", rhs.offset, " LINE: ", line_num, '\n'));
   TEST_REQUIRE(lhs.save == rhs.save,
-               TEST_WRITE_CONCATENATED("\nSave:\nExpected output ", lhs.save, "\nActual output   ", rhs.save, '\n'));
+               TEST_WRITE_CONCATENATED("\nSave:\nExpected output ", lhs.save, "\nActual output   ", rhs.save, " LINE: ", line_num, '\n'));
   TEST_REQUIRE(
       lhs.abbrev == rhs.abbrev,
-      TEST_WRITE_CONCATENATED("\nAbbrev:\nExpected output ", lhs.abbrev, "\nActual output   ", rhs.abbrev, '\n'));
+      TEST_WRITE_CONCATENATED("\nAbbrev:\nExpected output ", lhs.abbrev, "\nActual output   ", rhs.abbrev, " LINE: ", line_num, '\n'));
 }
 
-static void assert_equal(const std::chrono::local_info& lhs, const std::chrono::local_info& rhs) {
+static void assert_equal_f(const std::chrono::local_info& lhs, const std::chrono::local_info& rhs, int line_num) {
   TEST_REQUIRE(
       lhs.result == rhs.result,
-      TEST_WRITE_CONCATENATED("\nResult:\nExpected output ", lhs.result, "\nActual output   ", rhs.result, '\n'));
+      TEST_WRITE_CONCATENATED("\nResult:\nExpected output ", lhs.result, "\nActual output   ", rhs.result, " LINE: ", line_num, '\n'));
 
-  assert_equal(lhs.first, rhs.first);
-  assert_equal(lhs.second, rhs.second);
+  assert_equal_f(lhs.first, rhs.first, line_num);
+  assert_equal_f(lhs.second, rhs.second, line_num);
 }
+
+#define assert_equal(LHS, RHS) assert_equal_f(LHS, RHS, __LINE__)
 
 /***** ***** TESTS ***** *****/
 
