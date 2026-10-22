@@ -534,6 +534,50 @@ class TestApplySubtitutions(unittest.TestCase):
             finally:
                 lit_config.numWorkers = old_workers
 
+    def test_run_sh_test_omits_output_on_pass(self):
+        import tempfile
+        import lit.TestingConfig
+
+        lit_config = TestIntegratedTestKeywordParser.litConfig
+        with tempfile.TemporaryDirectory() as td:
+            cfg = lit.TestingConfig.TestingConfig.fromdefaults(lit_config)
+            cfg.name = "ShSuite"
+            suite = Test.TestSuite("ShSuite", td, td, cfg)
+
+            pass_path = os.path.join(td, "pass.txt")
+            with open(pass_path, "w") as f:
+                f.write("# RUN: echo hello\n")
+
+            xpass_path = os.path.join(td, "xpass.txt")
+            with open(xpass_path, "w") as f:
+                f.write("# XFAIL: *\n# RUN: echo hello\n")
+
+            old_show_all = getattr(lit_config, "showAllOutput", False)
+            try:
+                lit_config.showAllOutput = False
+                t_pass = Test.Test(suite, ("pass.txt",), cfg)
+                res_pass = lit.TestRunner.executeShTest(t_pass, lit_config, False)
+                self.assertEqual(res_pass.code, Test.PASS)
+                self.assertEqual(res_pass.output, "")
+
+                lit_config.showAllOutput = True
+                t_pass_all = Test.Test(suite, ("pass.txt",), cfg)
+                res_pass_all = lit.TestRunner.executeShTest(
+                    t_pass_all, lit_config, False
+                )
+                self.assertEqual(res_pass_all.code, Test.PASS)
+                self.assertIn("Exit Code: 0", res_pass_all.output)
+                self.assertIn("hello", res_pass_all.output)
+
+                lit_config.showAllOutput = False
+                t_xpass = Test.Test(suite, ("xpass.txt",), cfg)
+                res_xpass = lit.TestRunner.executeShTest(t_xpass, lit_config, False)
+                t_xpass.setResult(res_xpass)
+                self.assertEqual(t_xpass.result.code, Test.XPASS)
+                self.assertIn("Exit Code: 0", t_xpass.result.output)
+            finally:
+                lit_config.showAllOutput = old_show_all
+
 
 if __name__ == "__main__":
     TestIntegratedTestKeywordParser.load_keyword_parser_lit_tests()

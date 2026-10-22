@@ -48,6 +48,7 @@ def main(builtin_params={}):
         maxIndividualTestTime=opts.maxIndividualTestTime,
     )
     lit_config.numWorkers = opts.workers
+    lit_config.showAllOutput = opts.test_output == "all"
 
     discovered_tests = lit.discovery.find_tests_for_inputs(
         lit_config, opts.test_paths

@@ -1024,7 +1024,7 @@ def _prepend_left(prefix, node):
 
 
 def executeScriptInternal(
-    test, litConfig, tmpBase, commands, cwd, debug=True
+    test, litConfig, tmpBase, commands, cwd, debug=True, need_pass_output=True
 ) -> tuple[str, str, int, str | None, str | None]:
     cmds = []
     update_output = None
@@ -1113,6 +1113,9 @@ def executeScriptInternal(
     )
 
     out = err = ""
+    if exitCode == 0 and timeoutInfo is None and not need_pass_output:
+        return out, err, exitCode, timeoutInfo, update_output
+
     for i, result in enumerate(results):
         if not debug:
             out += result.stdout
@@ -2304,9 +2307,16 @@ def parseIntegratedTestScript(test, additional_parsers=[], require_script=True):
 
 
 def _runShTest(test, litConfig, useExternalSh, script, tmpBase) -> lit.Test.Result:
+    need_pass_output = (
+        getattr(litConfig, "showAllOutput", False)
+        or bool(test.xfails)
+        or getattr(litConfig, "update_tests", False)
+    )
+
     # Always returns the tuple (out, err, exitCode, timeoutInfo, status).
     def runOnce(
         execdir,
+        attempt,
     ) -> tuple[str, str, int, str | None, Test.ResultCode, str | None]:
         # script is modified below (for litConfig.per_test_coverage, and for
         # %dbg expansions).  runOnce can be called multiple times, but applying
@@ -2339,7 +2349,12 @@ def _runShTest(test, litConfig, useExternalSh, script, tmpBase) -> lit.Test.Resu
                 res = executeScript(test, litConfig, tmpBase, scriptCopy, execdir)
             else:
                 res = executeScriptInternal(
-                    test, litConfig, tmpBase, scriptCopy, execdir
+                    test,
+                    litConfig,
+                    tmpBase,
+                    scriptCopy,
+                    execdir,
+                    need_pass_output=need_pass_output or attempt > 0,
                 )
         except ScriptFatal as e:
             out = f"# " + "\n# ".join(str(e).splitlines()) + "\n"
@@ -2363,7 +2378,7 @@ def _runShTest(test, litConfig, useExternalSh, script, tmpBase) -> lit.Test.Resu
     attempts = test.allowed_retries + 1
     test_updates = []
     for i in range(attempts):
-        res = runOnce(execdir)
+        res = runOnce(execdir, i)
         out, err, exitCode, timeoutInfo, status, test_update_output = res
         test_updates.append(test_update_output)
         if status != Test.FAIL:
@@ -2377,18 +2392,26 @@ def _runShTest(test, litConfig, useExternalSh, script, tmpBase) -> lit.Test.Resu
         else:
             status = Test.FLAKYPASS
 
-    # Form the output log.
-    output = f"Exit Code: {exitCode}\n"
+    # Omit the execution trace output for passing tests unless requested
+    # (e.g., via -a / --show-all / --test-output=all) or if the test has XFAIL
+    # conditions that could turn PASS into XPASS (or UNRESOLVED on syntax error)
+    # in test.setResult().
+    need_output = status != Test.PASS or need_pass_output
+    if need_output:
+        # Form the output log.
+        output = f"Exit Code: {exitCode}\n"
 
-    if timeoutInfo is not None:
-        output += """Timeout: %s\n""" % (timeoutInfo,)
-    output += "\n"
+        if timeoutInfo is not None:
+            output += """Timeout: %s\n""" % (timeoutInfo,)
+        output += "\n"
 
-    # Append the outputs, if present.
-    if out:
-        output += """Command Output (stdout):\n--\n%s\n--\n""" % (out,)
-    if err:
-        output += """Command Output (stderr):\n--\n%s\n--\n""" % (err,)
+        # Append the outputs, if present.
+        if out:
+            output += """Command Output (stdout):\n--\n%s\n--\n""" % (out,)
+        if err:
+            output += """Command Output (stderr):\n--\n%s\n--\n""" % (err,)
+    else:
+        output = ""
 
     return lit.Test.Result(
         status,
