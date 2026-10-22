@@ -381,6 +381,44 @@ class TestApplySubtitutions(unittest.TestCase):
             except AssertionError:
                 pass
 
+    def test_regex_edge_cases(self):
+        script = ["ac", "z", "echo %%foo %bar clang-check clang"]
+        substitutions = [
+            (r"ab{,2}c", "MATCH_QUANT"),
+            (r"([]a-z)WRONG[])*[]z]", "MATCH_CC"),
+            (r"%bar", "BAR"),
+            (r"(?<!\S)clang(?!\S)", "/bin/clang"),
+        ]
+        result = lit.TestRunner.applySubstitutions(script, substitutions)
+        self.assertEqual(
+            result,
+            ["MATCH_QUANT", "MATCH_CC", "echo %foo BAR clang-check /bin/clang"],
+        )
+
+    def test_prepend_left_matches_shparser(self):
+        import shlex
+        from lit import ShUtil
+        from lit.ShCommands import Command
+
+        dbg = "RUN: at line 1"
+        for command in ["cmd1 & cmd2", "cmd1 || cmd2 ; cmd3 && cmd4"]:
+            expected = ShUtil.ShParser(
+                f"@echo '# {dbg}' && @echo {shlex.quote(command.lstrip())} && {command}",
+                False,
+                False,
+            ).parse()
+            parsed = ShUtil.ShParser(command, False, False).parse()
+            echo_dbg = ShUtil.Pipeline(
+                [Command(["@echo", f"# {dbg}"], [])], False, False
+            )
+            echo_cmd = ShUtil.Pipeline(
+                [Command(["@echo", command.lstrip()], [])], False, False
+            )
+            actual = lit.TestRunner._prepend_left(
+                ShUtil.Seq(echo_dbg, "&&", echo_cmd), parsed
+            )
+            self.assertEqual(actual, expected)
+
 
 if __name__ == "__main__":
     TestIntegratedTestKeywordParser.load_keyword_parser_lit_tests()

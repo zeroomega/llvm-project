@@ -77,12 +77,13 @@ class TestUpdaterException(Exception):
 # COMMAND that follows %dbg(ARG) is also captured. COMMAND can be
 # empty as a result of conditinal substitution.
 kPdbgRegex = "%dbg\\(([^)'\"]*)\\)((?:.|\\n)*)"
+_kPdbgRegex = re.compile(r"%dbg\(([^)'\"]*)\)(.*)", re.DOTALL)
 
 
 def buildPdbgCommand(msg, cmd):
     res = f"%dbg({msg}) {cmd}"
-    assert re.fullmatch(
-        kPdbgRegex, res
+    assert _kPdbgRegex.fullmatch(
+        res
     ), f"kPdbgRegex expected to match actual %dbg usage: {res}"
     return res
 
@@ -1016,6 +1017,12 @@ def formatOutput(title, data, limit=None):
 # If debug is False (set by some custom lit test formats that call this
 # function), out contains only stdout from the script, err contains only stderr
 # from the script, and there is no execution trace.
+def _prepend_left(prefix, node):
+    if isinstance(node, ShUtil.Seq):
+        return ShUtil.Seq(_prepend_left(prefix, node.lhs), node.op, node.rhs)
+    return ShUtil.Seq(prefix, "&&", node)
+
+
 def executeScriptInternal(
     test, litConfig, tmpBase, commands, cwd, debug=True
 ) -> tuple[str, str, int, str | None, str | None]:
@@ -1025,25 +1032,54 @@ def executeScriptInternal(
         # Within lit, we try to always add '%dbg(...)' to command lines in order
         # to maximize debuggability.  However, custom lit test formats might not
         # always add it, so add a generic debug message in that case.
-        match = re.fullmatch(kPdbgRegex, ln)
+        match = _kPdbgRegex.fullmatch(ln)
         if match:
             dbg = match.group(1)
             command = match.group(2)
         else:
             dbg = "command line"
             command = ln
-        if debug:
-            ln = f"@echo '# {dbg}' "
-            if command:
-                ln += f"&& @echo {shlex.quote(command.lstrip())} && {command}"
-            else:
-                ln += "has no command after substitutions"
-        else:
-            ln = command
         try:
-            cmds.append(
-                ShUtil.ShParser(ln, litConfig.isWindows, test.config.pipefail).parse()
-            )
+            if not command and debug:
+                cmds.append(
+                    ShUtil.Pipeline(
+                        [
+                            Command(
+                                [
+                                    "@echo",
+                                    f"# {dbg}",
+                                    "has",
+                                    "no",
+                                    "command",
+                                    "after",
+                                    "substitutions",
+                                ],
+                                [],
+                            )
+                        ],
+                        False,
+                        test.config.pipefail,
+                    )
+                )
+            else:
+                parsed = ShUtil.ShParser(
+                    command, litConfig.isWindows, test.config.pipefail
+                ).parse()
+                if debug:
+                    echo_dbg = ShUtil.Pipeline(
+                        [Command(["@echo", f"# {dbg}"], [])],
+                        False,
+                        test.config.pipefail,
+                    )
+                    echo_cmd = ShUtil.Pipeline(
+                        [Command(["@echo", command.lstrip()], [])],
+                        False,
+                        test.config.pipefail,
+                    )
+                    parsed = _prepend_left(
+                        ShUtil.Seq(echo_dbg, "&&", echo_cmd), parsed
+                    )
+                cmds.append(parsed)
         except:
             raise ScriptFatal(
                 f"shell parser error on {dbg}: {command.lstrip()}\n"
@@ -1117,7 +1153,7 @@ def executeScriptInternal(
 
         # If nothing interesting happened, move on.
         if (
-            test.config.maxIndividualTestTime == 0
+            not result.timeoutReached
             and result.exitCode == 0
             and not result.stdout.strip()
             and not result.stderr.strip()
@@ -1445,6 +1481,74 @@ def getDefaultSubstitutions(test, tmpDir, tmpBase, normalize_slashes=False):
 def _caching_re_compile(r):
     return re.compile(r)
 
+
+try:
+    import re._parser as _sre_parse
+except ImportError:
+    import sre_parse as _sre_parse
+
+
+def _extract_literal_hint(pattern, compiled_re):
+    """Extract a guaranteed required literal substring from a regex pattern,
+    or None if no non-empty literal substring is guaranteed to be present in
+    every match."""
+    if not isinstance(pattern, str) or (
+        compiled_re.flags & (re.IGNORECASE | re.VERBOSE)
+    ):
+        return None
+    try:
+        parsed = _sre_parse.parse(pattern, flags=compiled_re.flags)
+    except Exception:
+        return None
+    runs = [[]]
+
+    def _walk(nodes):
+        for op, av in nodes:
+            if op == _sre_parse.LITERAL:
+                runs[-1].append(chr(av))
+            elif op in (_sre_parse.AT, _sre_parse.ASSERT, _sre_parse.ASSERT_NOT):
+                # Zero-width assertions (e.g. \b, ^, $, (?<!...), (?!...)) do
+                # not consume characters, so adjacent literals stay contiguous.
+                continue
+            elif op == _sre_parse.SUBPATTERN:
+                # av is (group, add_flags, del_flags, p)
+                _, add_flags, _, sub_nodes = av
+                if add_flags & (re.IGNORECASE | re.VERBOSE):
+                    runs.append([])
+                else:
+                    _walk(sub_nodes)
+            elif op in (
+                _sre_parse.MAX_REPEAT,
+                _sre_parse.MIN_REPEAT,
+                getattr(_sre_parse, "POSSESSIVE_REPEAT", None),
+            ):
+                # av is (min, max, item)
+                min_rep, max_rep, sub_nodes = av
+                if (
+                    min_rep >= 1
+                    and len(sub_nodes) == 1
+                    and sub_nodes[0][0] == _sre_parse.LITERAL
+                ):
+                    rep_count = min(min_rep, 32)
+                    runs[-1].append(chr(sub_nodes[0][1]) * rep_count)
+                    if max_rep != min_rep or min_rep > rep_count:
+                        runs.append([])
+                else:
+                    runs.append([])
+            else:
+                runs.append([])
+
+    _walk(parsed)
+    best = max(("".join(r) for r in runs), key=len, default="")
+    return best if best else None
+
+
+@functools.lru_cache(maxsize=None)
+def _prepare_pattern(r):
+    compiled = _caching_re_compile(r)
+    return compiled, _extract_literal_hint(r, compiled)
+
+
 class ExpandableScriptDirective:
     """
     Common interface for lit directives for which any lit substitutions must be
@@ -1663,10 +1767,10 @@ def applySubstitutions(script, substitutions, conditions={}, recursion_limit=Non
 
     # We use #_MARKER_# to hide %% while we do the other substitutions.
     def escapePercents(ln):
-        return _caching_re_compile("%%").sub("#_MARKER_#", ln)
+        return ln.replace("%%", "#_MARKER_#") if "%%" in ln else ln
 
     def unescapePercents(ln):
-        return _caching_re_compile("#_MARKER_#").sub("%", ln)
+        return ln.replace("#_MARKER_#", "%") if "#_MARKER_#" in ln else ln
 
     def substituteIfElse(ln):
         # early exit to avoid wasting time on lines without
@@ -1757,19 +1861,33 @@ def applySubstitutions(script, substitutions, conditions={}, recursion_limit=Non
         assert len(ln) == 0
         return result
 
+    def compileSubstitutions():
+        return [
+            (*_prepare_pattern(a), str(b).replace("\\", "\\\\"))
+            for a, b in substitutions
+        ]
+
+    compiled_substs = compileSubstitutions()
+
     def processLine(ln):
         # Apply substitutions
         ln = substituteIfElse(escapePercents(ln))
-        for a, b in substitutions:
-            b = b.replace("\\", "\\\\")
-            # re.compile() has a built-in LRU cache with 512 entries. In some
-            # test suites lit ends up thrashing that cache, which made e.g.
-            # check-llvm run 50% slower.  Use an explicit, unbounded cache
-            # to prevent that from happening.  Since lit is fairly
-            # short-lived, since the set of substitutions is fairly small, and
-            # since thrashing has such bad consequences, not bounding the cache
-            # seems reasonable.
-            ln = _caching_re_compile(a).sub(str(b), escapePercents(ln))
+        if compiled_substs:
+            ln = escapePercents(ln)
+            last_idx = len(compiled_substs) - 1
+            for idx, (compiled_re, hint, escaped_b) in enumerate(compiled_substs):
+                if hint is not None and hint not in ln:
+                    continue
+                # re.compile() has a built-in LRU cache with 512 entries. In some
+                # test suites lit ends up thrashing that cache, which made e.g.
+                # check-llvm run 50% slower.  Use an explicit, unbounded cache
+                # to prevent that from happening.  Since lit is fairly
+                # short-lived, since the set of substitutions is fairly small, and
+                # since thrashing has such bad consequences, not bounding the cache
+                # seems reasonable.
+                ln = compiled_re.sub(escaped_b, ln)
+                if idx < last_idx and "%%" in ln:
+                    ln = ln.replace("%%", "#_MARKER_#")
 
         # Strip the trailing newline and any extra whitespace.
         return ln.strip()
@@ -1797,6 +1915,7 @@ def applySubstitutions(script, substitutions, conditions={}, recursion_limit=Non
     for directive in script:
         if isinstance(directive, SubstDirective):
             directive.adjust_substitutions(substitutions)
+            compiled_substs = compileSubstitutions()
         else:
             if isinstance(directive, CommandDirective):
                 line = directive.command
