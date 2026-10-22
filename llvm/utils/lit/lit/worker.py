@@ -46,7 +46,7 @@ def execute(test):
         result = _execute(test, _lit_config)
 
     test.setResult(result)
-    return test
+    return (test.result, test.requires)
 
 
 def execute_batch(tests):
@@ -55,11 +55,13 @@ def execute_batch(tests):
     Batching multiple tests per task dispatch reduces inter-process IPC round-trips,
     serialization overhead, and management thread wakeups on high core count systems.
     """
+    results = []
     for test in tests:
         with _get_parallelism_semaphore(test):
             result = _execute(test, _lit_config)
         test.setResult(result)
-    return tests
+        results.append((test.result, test.requires))
+    return results
 
 
 # TODO(python3): replace with contextlib.nullcontext

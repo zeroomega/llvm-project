@@ -348,8 +348,8 @@ class Run:
                     )
                     for local_test, remote_test in zip(local_tests, remote_tests):
                         self._update_test(local_test, remote_test)
-                        self.progress_callback(remote_test)
-                        if remote_test.isFailure():
+                        self.progress_callback(local_test)
+                        if local_test.isFailure():
                             self.failures += 1
                             # max_failures is None or a positive int, never 0
                             # (cl_arguments.py's _positive_int enforces i > 0),
@@ -361,13 +361,16 @@ class Run:
         except BrokenProcessPool as e:
             raise WorkerCrashError(str(e))
 
-    # Update local test object "in place" from remote test object.  This
+    # Update local test object "in place" from remote test result.  This
     # ensures that the original test object which is used for printing test
     # results reflects the changes.
     def _update_test(self, local_test, remote_test):
-        # Needed for getMissingRequiredFeatures()
-        local_test.requires = remote_test.requires
-        local_test.result = remote_test.result
+        if isinstance(remote_test, tuple):
+            local_test.result, local_test.requires = remote_test
+        else:
+            # Needed for getMissingRequiredFeatures()
+            local_test.requires = remote_test.requires
+            local_test.result = remote_test.result
 
     # TODO(yln): interferes with progress bar
     # Some tests use threads internally, and at least on Linux each of these
