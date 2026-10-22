@@ -435,6 +435,12 @@ def killProcessAndChildren(pid):
 
         try:
             psutilProc = psutil.Process(pid)
+            # Suspend the parent process first so it cannot fork/spawn new
+            # children while we snapshot and terminate its process tree.
+            try:
+                psutilProc.suspend()
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
             # Handle the different psutil API versions
             try:
                 # psutil >= 2.x
@@ -445,10 +451,10 @@ def killProcessAndChildren(pid):
             for child in children_iterator:
                 try:
                     child.kill()
-                except psutil.NoSuchProcess:
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
                     pass
             psutilProc.kill()
-        except psutil.NoSuchProcess:
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
             pass
 
 

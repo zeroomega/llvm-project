@@ -99,15 +99,6 @@ class Run:
         """SIGKILL all workers on abort (ctrl-C, --max-failures, --max-time,
         worker crash). Pre-3.14 ProcessPoolExecutor has no force-stop."""
         try:
-            # We don't call ex.shutdown() here: it joins the management thread,
-            # which is blocked reading the queue we just corrupted.
-            # On 3.8 / 3.9, cancel() races with the call-queue feeder thread and can
-            # deadlock or corrupt the queue (https://github.com/python/cpython/issues/94440).
-            # Skipping it is safe because we SIGKILL workers below, so no pending future
-            # will ever be dispatched. cancel() on 3.10+ is a clean hint.
-            if sys.version_info >= (3, 10):
-                for future in future_to_test:
-                    future.cancel()
             # Killing worker processes can corrupt the executor's queues, which makes it
             # unsafe for its atexit hooks to join their threads. Disable those hooks
             # before terminating workers (a second ctrl-C should not bypass this cleanup).
@@ -115,10 +106,17 @@ class Run:
             # Otherwise, a thread blocked on a partially written pipe may require multiple
             # ctrl-C to unblock.
             # See: https://github.com/python/cpython/issues/125886
-            # These threads are daemonic on Python 3.8, so disabling them is harmless.
             for ex in executors:
                 if hasattr(ex, "_call_queue") and ex._call_queue is not None:
                     ex._call_queue.cancel_join_thread()
+                ex._shutdown_thread = True
+                work_ids = getattr(ex, "_work_ids", None)
+                if work_ids is not None:
+                    while True:
+                        try:
+                            work_ids.get_nowait()
+                        except queue.Empty:
+                            break
             if hasattr(concurrent.futures.process, "_threads_wakeups"):
                 concurrent.futures.process._threads_wakeups.clear()
             tree_kill_ok, _ = lit.util.killProcessAndChildrenIsSupported()
@@ -131,6 +129,48 @@ class Run:
             for ex in executors:
                 for proc in list((ex._processes or {}).values()):
                     proc.join()  # reap: SIGKILL already delivered
+            # SimpleQueue creates a Pipe(duplex=False) in the parent process and
+            # never closes _writer in the parent. If a worker is SIGKILLed after
+            # writing the 4-byte length header of a >16KB payload to _result_queue
+            # but before writing the payload body, _ExecutorManagerThread (which is
+            # non-daemonic on Python 3.9+) blocks forever in os.read() waiting for
+            # the rest of the message because the parent still holds _writer open.
+            # Closing _writer here after all workers have been reaped delivers EOF
+            # to _reader so _ExecutorManagerThread wakes with EOFError, runs
+            # terminate_broken(), and exits cleanly instead of hanging at shutdown.
+            for ex in executors:
+                result_queue = getattr(ex, "_result_queue", None)
+                writer = getattr(result_queue, "_writer", None)
+                if writer is not None:
+                    try:
+                        writer.close()
+                    except Exception:
+                        pass
+                wakeup = getattr(ex, "_executor_manager_thread_wakeup", None)
+                shutdown_lock = getattr(ex, "_shutdown_lock", None)
+                if wakeup is not None:
+                    try:
+                        if shutdown_lock is not None:
+                            with shutdown_lock:
+                                if not getattr(wakeup, "_closed", False):
+                                    wakeup.wakeup()
+                        elif not getattr(wakeup, "_closed", False):
+                            wakeup.wakeup()
+                    except Exception:
+                        pass
+            for ex in executors:
+                manager_thread = getattr(ex, "_executor_manager_thread", None)
+                if manager_thread is not None and manager_thread.is_alive():
+                    manager_thread.join(timeout=1.0)
+            # Cancel futures only after killing/reaping workers and allowing
+            # _ExecutorManagerThread.terminate_broken() to finish. Calling
+            # future.cancel() before terminate_broken() causes Python <= 3.11's
+            # terminate_broken() to call set_exception() on CANCELLED futures in
+            # pending_work_items, raising unhandled InvalidStateError in the
+            # manager thread.
+            if sys.version_info >= (3, 10):
+                for future in future_to_test:
+                    future.cancel()
             # TODO: Python>=3.14 adds ex.kill_workers(), which stops the workers cleanly
             # without corrupting the queues. However kill_workers() won't reap the
             # llc / FileCheck grandchildren the workers spawned.
