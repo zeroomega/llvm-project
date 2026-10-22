@@ -466,6 +466,74 @@ class TestApplySubtitutions(unittest.TestCase):
                 ],
             )
 
+    def test_googletest_sharding_and_parallel_discovery(self):
+        import pickle
+        import stat
+        import sys
+        import tempfile
+        import lit.TestingConfig
+        from lit.formats.googletest import GoogleTest
+
+        lit_config = TestIntegratedTestKeywordParser.litConfig
+        exe_suffix = "Tests.exe" if sys.platform in ["win32", "cygwin"] else "Tests"
+        with tempfile.TemporaryDirectory() as td:
+            cfg = lit.TestingConfig.TestingConfig.fromdefaults(lit_config)
+            cfg.name = "GTestSuite"
+            gtest_fmt = GoogleTest(".", "Tests", run_under=[sys.executable])
+            cfg.test_format = gtest_fmt
+            suite = Test.TestSuite("GTestSuite", td, td, cfg)
+
+            for sub, count in [("SubA", 10), ("SubB", 40)]:
+                sub_dir = os.path.join(td, sub)
+                os.makedirs(sub_dir)
+                exe_path = os.path.join(sub_dir, f"{sub}{exe_suffix}")
+                with open(exe_path, "w") as f:
+                    f.write(
+                        "import sys\n"
+                        "if '--gtest_list_tests' in sys.argv:\n"
+                        "    print('Suite.')\n"
+                        f"    for i in range({count}):\n"
+                        "        print(f'  Test{i}')\n"
+                    )
+                os.chmod(exe_path, stat.S_IRWXU)
+
+            old_workers = getattr(lit_config, "numWorkers", None)
+            try:
+                lit_config.numWorkers = 4
+                # Root discovery prewarms both SubA/SubATests and SubB/SubBTests in parallel.
+                root_tests = list(
+                    gtest_fmt.getTestsInDirectory(suite, (), lit_config, cfg)
+                )
+                self.assertEqual(root_tests, [])
+                self.assertEqual(len(gtest_fmt._num_tests_cache), 2)
+                self.assertEqual(len(gtest_fmt._prewarmed_dirs), 2)
+
+                # SubA has 10 tests: with default min_shard_size=16, it stays 1 shard (not 4).
+                suba_tests = list(
+                    gtest_fmt.getTestsInDirectory(suite, ("SubA",), lit_config, cfg)
+                )
+                self.assertEqual(len(suba_tests), 1)
+                self.assertEqual(
+                    suba_tests[0].path_in_suite,
+                    ("SubA", ".", f"SubA{exe_suffix}", "0", "1"),
+                )
+
+                # Pickling a GoogleTest shard must not serialize discovery caches.
+                unpickled_fmt = pickle.loads(pickle.dumps(suba_tests[0])).config.test_format
+                self.assertEqual(unpickled_fmt._num_tests_cache, {})
+                self.assertEqual(unpickled_fmt._prewarmed_dirs, set())
+                self.assertEqual(unpickled_fmt.seen_executables, set())
+
+                # SubB has 40 tests: with numWorkers=4 and min_shard_size=16, shard_size=16 -> ceil(40/16)=3 shards.
+                subb_tests = list(
+                    gtest_fmt.getTestsInDirectory(suite, ("SubB",), lit_config, cfg)
+                )
+                self.assertEqual(len(subb_tests), 3)
+                self.assertEqual(gtest_fmt._num_tests_cache, {})
+                self.assertEqual(gtest_fmt._prewarmed_dirs, set())
+            finally:
+                lit_config.numWorkers = old_workers
+
 
 if __name__ == "__main__":
     TestIntegratedTestKeywordParser.load_keyword_parser_lit_tests()

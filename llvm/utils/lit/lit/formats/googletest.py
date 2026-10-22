@@ -27,30 +27,125 @@ class GoogleTest(TestFormat):
         self.test_suffixes = {exe_suffix, test_suffix + ".py"}
         self.test_prefixes = {test_prefix} if test_prefix else None
         self.run_under = run_under
+        self._num_tests_cache = {}
+        self._prewarmed_dirs = set()
 
-    def get_num_tests(self, path, litConfig, localConfig):
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        state["seen_executables"] = set()
+        state["_num_tests_cache"] = {}
+        state["_prewarmed_dirs"] = set()
+        return state
+
+    def _discover_num_tests_raw(self, path, env):
         list_test_cmd = self.prepareCmd(
             [path, "--gtest_list_tests", "--gtest_filter=-*DISABLED_*"]
         )
         try:
-            out = subprocess.check_output(list_test_cmd, env=localConfig.environment)
+            out = subprocess.check_output(list_test_cmd, env=env)
         except subprocess.CalledProcessError as exc:
+            return None, (exc, exc.output)
+        return (
+            sum(
+                map(
+                    lambda line: line.startswith(b"  "),
+                    out.splitlines(False),
+                )
+            ),
+            None,
+        )
+
+    def get_num_tests(self, path, litConfig, localConfig):
+        cached = self._num_tests_cache.pop(path, None)
+        if cached is None:
+            cached = self._discover_num_tests_raw(path, localConfig.environment)
+        count, err = cached
+        if err is not None:
             litConfig.warning(
                 "unable to discover google-tests in %r: %s. Process output: %s"
-                % (path, sys.exc_info()[1], exc.output)
+                % (path, err[0], err[1])
             )
             return None
-        return sum(
-            map(
-                lambda line: line.startswith(b"  "),
-                out.splitlines(False),
-            )
+        return count
+
+    def _collect_executables_for_prewarm(self, root_path, litConfig, localConfig):
+        cfg_names = (
+            set(getattr(litConfig, "local_config_names", ()))
+            | set(getattr(litConfig, "config_names", ()))
+            | set(getattr(litConfig, "site_config_names", ()))
         )
+        excludes = set(getattr(localConfig, "excludes", ())) | {
+            "Output",
+            ".svn",
+            ".git",
+            "CMakeFiles",
+        }
+        executables = []
+        seen = set(self.seen_executables) | set(self._num_tests_cache)
+        stack = [root_path]
+        while stack:
+            curr_dir = stack.pop()
+            try:
+                entries = os.listdir(curr_dir)
+            except OSError:
+                continue
+            if curr_dir != root_path:
+                if cfg_names and cfg_names.intersection(entries):
+                    continue
+                self._prewarmed_dirs.add(curr_dir)
+            for subdir in self.test_sub_dirs:
+                dir_path = os.path.join(curr_dir, subdir)
+                if not os.path.isdir(dir_path):
+                    continue
+                for fn in lit.util.listdir_files(
+                    dir_path,
+                    suffixes=self.test_suffixes,
+                    prefixes=self.test_prefixes,
+                ):
+                    execpath = os.path.join(curr_dir, subdir, fn)
+                    if execpath not in seen:
+                        seen.add(execpath)
+                        executables.append(execpath)
+            for entry in entries:
+                if entry in excludes:
+                    continue
+                sub_path = os.path.join(curr_dir, entry)
+                if os.path.isdir(sub_path):
+                    stack.append(sub_path)
+        return executables
+
+    def _prewarm_num_tests(self, source_path, litConfig, localConfig, max_workers):
+        if source_path in self._prewarmed_dirs:
+            self._prewarmed_dirs.discard(source_path)
+            return
+        if max_workers <= 1:
+            return
+        executables = self._collect_executables_for_prewarm(
+            source_path, litConfig, localConfig
+        )
+        if len(executables) <= 1:
+            return
+        from concurrent.futures import ThreadPoolExecutor
+
+        env = localConfig.environment
+        workers = min(len(executables), max_workers)
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            for execpath, res in zip(
+                executables,
+                pool.map(lambda p: self._discover_num_tests_raw(p, env), executables),
+            ):
+                self._num_tests_cache[execpath] = res
 
     def getTestsInDirectory(self, testSuite, path_in_suite, litConfig, localConfig):
         init_shard_size = 512  # number of tests in a shard
-        core_count = lit.util.usable_core_count()
+        usable_cores = lit.util.usable_core_count()
+        worker_count = getattr(litConfig, "numWorkers", None)
+        core_count = worker_count or usable_cores
+        default_min_shard_size = max(
+            1, int(os.environ.get("LIT_GTEST_MIN_SHARD_SIZE", 16))
+        )
         source_path = testSuite.getSourcePath(path_in_suite)
+        self._prewarm_num_tests(source_path, litConfig, localConfig, core_count)
         for subdir in self.test_sub_dirs:
             dir_path = os.path.join(source_path, subdir)
             if not os.path.isdir(dir_path):
@@ -71,12 +166,27 @@ class GoogleTest(TestFormat):
                 num_tests = self.get_num_tests(execpath, litConfig, localConfig)
                 if num_tests is not None:
                     if litConfig.gtest_sharding:
+                        is_py_test = execpath.endswith(".py")
+                        target_shards = (
+                            usable_cores
+                            if (is_py_test and worker_count == 1)
+                            else core_count
+                        )
+                        min_shard_size = (
+                            max(1, int(os.environ.get("LIT_GTEST_MIN_SHARD_SIZE", 1)))
+                            if is_py_test
+                            else default_min_shard_size
+                        )
                         # Compute the number of shards.
                         shard_size = init_shard_size
                         nshard = int(math.ceil(num_tests / shard_size))
-                        while nshard < core_count and shard_size > 1:
-                            shard_size = shard_size // 2
-                            nshard = int(math.ceil(num_tests / shard_size))
+                        if num_tests > 0:
+                            while (
+                                nshard < target_shards
+                                and shard_size > min_shard_size
+                            ):
+                                shard_size = shard_size // 2
+                                nshard = int(math.ceil(num_tests / shard_size))
 
                         # Create one lit test for each shard.
                         for idx in range(nshard):
