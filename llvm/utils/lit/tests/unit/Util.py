@@ -88,6 +88,33 @@ class TestCommandCache(unittest.TestCase):
         # Second time should be cached, i.e. equal to the first
         self.assertEqual(lit_config.run_command_cached("date", shell=True), date)
 
+    def test_which_output_path_not_cached(self):
+        import os
+        import tempfile
+        import lit.util
+
+        with tempfile.TemporaryDirectory() as td:
+            out_dir = os.path.join(td, "Output", "test.tmp")
+            bin_dir = os.path.join(td, "bin")
+            os.makedirs(out_dir)
+            os.makedirs(bin_dir)
+            bin_tool = os.path.join(bin_dir, "mytool")
+            with open(bin_tool, "w") as f:
+                f.write("#!/bin/sh\n")
+            paths = out_dir + os.pathsep + bin_dir
+            self.assertEqual(
+                lit.util.which("mytool", paths),
+                os.path.normcase(os.path.abspath(bin_tool)),
+            )
+            out_tool = os.path.join(out_dir, "mytool")
+            with open(out_tool, "w") as f:
+                f.write("#!/bin/sh\n")
+            self.assertEqual(
+                lit.util.which("mytool", paths),
+                os.path.normcase(os.path.abspath(out_tool)),
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
+

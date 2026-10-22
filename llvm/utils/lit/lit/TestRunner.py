@@ -1384,6 +1384,26 @@ def colonNormalizePath(path):
         return path[1:]
 
 
+@functools.lru_cache(maxsize=None)
+def _cached_realpath(path):
+    return os.path.realpath(path)
+
+
+@functools.lru_cache(maxsize=None)
+def _cached_anchor(path):
+    return pathlib.Path(path).anchor
+
+
+def _fast_realpath(path, dirpath=None, basename=None):
+    if dirpath is None:
+        return _cached_realpath(path)
+    if not kIsWindows and not os.path.islink(path):
+        real_dir = _cached_realpath(dirpath)
+        res = os.path.join(real_dir, basename)
+        return res
+    return os.path.realpath(path)
+
+
 def getDefaultSubstitutions(test, tmpDir, tmpBase, normalize_slashes=False):
     sourcepath = test.getSourcePath()
     sourcedir = os.path.dirname(sourcepath)
@@ -1413,19 +1433,21 @@ def getDefaultSubstitutions(test, tmpDir, tmpBase, normalize_slashes=False):
     if normalize_slashes:
         fs_sep = "/"
 
+    src_anchor = _cached_anchor(sourcedir)
+    tmp_anchor = _cached_anchor(tmpDir)
     substitutions.extend(
         [
             (
                 "%{fs-src-root}",
-                pathlib.Path(sourcedir).anchor.replace("\\", "/")
+                src_anchor.replace("\\", "/")
                 if normalize_slashes
-                else pathlib.Path(sourcedir).anchor,
+                else src_anchor,
             ),
             (
                 "%{fs-tmp-root}",
-                pathlib.Path(tmpBase).anchor.replace("\\", "/")
+                tmp_anchor.replace("\\", "/")
                 if normalize_slashes
-                else pathlib.Path(tmpBase).anchor,
+                else tmp_anchor,
             ),
             ("%{fs-sep}", fs_sep),
         ]
@@ -1438,16 +1460,17 @@ def getDefaultSubstitutions(test, tmpDir, tmpBase, normalize_slashes=False):
         s = s.replace("&", r"\&")
         return s
 
-    path_substitutions = [
-        ("s", sourcepath),
-        ("S", sourcedir),
-        ("p", sourcedir),
-        ("t", tmpName),
-    ]
-    for path_substitution in path_substitutions:
-        letter = path_substitution[0]
-        path = path_substitution[1]
+    real_sourcedir = _cached_realpath(sourcedir)
+    real_sourcepath = _fast_realpath(sourcepath, sourcedir, sourceBaseName)
+    real_tmp = _fast_realpath(tmpName, tmpDir, tmpBaseName + ".tmp")
 
+    path_substitutions = [
+        ("s", sourcepath, real_sourcepath),
+        ("S", sourcedir, real_sourcedir),
+        ("p", sourcedir, real_sourcedir),
+        ("t", tmpName, real_tmp),
+    ]
+    for letter, path, real_path in path_substitutions:
         # Original path variant
         substitutions.append(("%" + letter, path))
 
@@ -1458,7 +1481,6 @@ def getDefaultSubstitutions(test, tmpDir, tmpBase, normalize_slashes=False):
         # Windows paths with substitute drives are not expanded by default
         # as they are used to avoid MAX_PATH issues, but sometimes we do
         # need the fully expanded path.
-        real_path = os.path.realpath(path)
         substitutions.append(("%{" + letter + ":real}", real_path))
         substitutions.append(("%{/" + letter + ":real}",
             real_path.replace("\\", "/")))

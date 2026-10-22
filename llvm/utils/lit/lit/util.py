@@ -113,16 +113,28 @@ def listdir_files(dirname, suffixes=None, exclude_filenames=None, prefixes=None)
         yield filename
 
 
+_which_cache = {}
+
+
 def which(command, paths=None):
     """which(command, [paths]) - Look up the given command in the paths string
     (or the PATH environment variable, if unspecified)."""
 
+    # Check for absolute match first.
+    if os.path.isabs(command):
+        cached = _which_cache.get(command)
+        if cached is not None:
+            return cached
+        if os.path.isfile(command):
+            res = os.path.normcase(os.path.normpath(command))
+            if "Output" not in command and "lit-tmp-" not in command:
+                _which_cache[command] = res
+            return res
+        if os.pathsep != ";":
+            return None
+
     if paths is None:
         paths = os.environ.get("PATH", "")
-
-    # Check for absolute match first.
-    if os.path.isabs(command) and os.path.isfile(command):
-        return os.path.normcase(os.path.normpath(command))
 
     # Would be nice if Python had a lib function for this.
     if not paths:
@@ -135,17 +147,29 @@ def which(command, paths=None):
         # running with a hermetic build system like Bazel) then
         # use a sane fallback so binaries can still be located.
         fallback = ".COM;.EXE;.BAT;.CMD"
-
-        pathext = os.environ.get("PATHEXT", fallback).split(";")
+        pathext_str = os.environ.get("PATHEXT", fallback)
+        pathext = pathext_str.split(";")
     else:
+        pathext_str = ""
         pathext = [""]
 
+    cache_key = (command, paths, pathext_str)
+    cached = _which_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
     # Search the paths...
+    can_cache = True
     for path in paths.split(os.pathsep):
+        if not os.path.isabs(path) or "Output" in path or "lit-tmp-" in path:
+            can_cache = False
         for ext in pathext:
             p = os.path.join(path, command + ext)
             if os.path.exists(p) and not os.path.isdir(p):
-                return os.path.normcase(os.path.abspath(p))
+                res = os.path.normcase(os.path.abspath(p))
+                if can_cache and "Output" not in res and "lit-tmp-" not in res:
+                    _which_cache[cache_key] = res
+                return res
 
     return None
 
