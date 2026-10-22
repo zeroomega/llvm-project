@@ -191,6 +191,15 @@ def print_discovered(tests, show_suites, show_tests):
             print("  %s" % t.getFullName())
 
 
+def _test_file_size(test):
+    if test.gtest_json_file is not None:
+        return 0
+    try:
+        return os.path.getsize(test.getFilePath())
+    except OSError:
+        return 0
+
+
 def determine_order(tests, order):
     from lit.cl_arguments import TestOrder
 
@@ -204,7 +213,12 @@ def determine_order(tests, order):
     else:
         assert enum_order == TestOrder.SMART, "Unknown TestOrder value"
         tests.sort(
-            key=lambda t: (not t.previous_failure, -t.previous_elapsed, t.getFullName())
+            key=lambda t: (
+                not t.previous_failure,
+                -t.previous_elapsed,
+                -_test_file_size(t) if not t.previous_elapsed else 0,
+                t.getFullName(),
+            )
         )
 
 

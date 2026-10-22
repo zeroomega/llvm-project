@@ -419,6 +419,53 @@ class TestApplySubtitutions(unittest.TestCase):
             )
             self.assertEqual(actual, expected)
 
+    def test_smart_order_falls_back_to_file_size(self):
+        import tempfile
+        import lit.main
+        import lit.TestingConfig
+
+        lit_config = TestIntegratedTestKeywordParser.litConfig
+        with tempfile.TemporaryDirectory() as td:
+            cfg = lit.TestingConfig.TestingConfig.fromdefaults(lit_config)
+            cfg.name = "suite"
+            suite = Test.TestSuite("suite", td, td, cfg)
+
+            small_path = os.path.join(td, "a_small.txt")
+            large_path = os.path.join(td, "z_large.txt")
+            timed_path = os.path.join(td, "m_timed.txt")
+            with open(small_path, "wb") as f:
+                f.write(b"x" * 10)
+            with open(large_path, "wb") as f:
+                f.write(b"x" * 1000)
+            with open(timed_path, "wb") as f:
+                f.write(b"x" * 5)
+
+            t_small = Test.Test(suite, ("a_small.txt",), cfg)
+            t_large = Test.Test(suite, ("z_large.txt",), cfg)
+            t_timed = Test.Test(suite, ("m_timed.txt",), cfg)
+            t_timed.previous_elapsed = 0.5
+            t_gtest = Test.Test(
+                suite,
+                ("b_gtest", "0", "1"),
+                cfg,
+                file_path=large_path,
+                gtest_json_file="out.json",
+            )
+            t_missing = Test.Test(suite, ("c_missing.txt",), cfg)
+
+            tests = [t_small, t_gtest, t_missing, t_large, t_timed]
+            lit.main.determine_order(tests, "smart")
+            self.assertEqual(
+                [t.getFullName() for t in tests],
+                [
+                    "suite :: m_timed.txt",
+                    "suite :: z_large.txt",
+                    "suite :: a_small.txt",
+                    "suite :: b_gtest/0/1",
+                    "suite :: c_missing.txt",
+                ],
+            )
+
 
 if __name__ == "__main__":
     TestIntegratedTestKeywordParser.load_keyword_parser_lit_tests()
