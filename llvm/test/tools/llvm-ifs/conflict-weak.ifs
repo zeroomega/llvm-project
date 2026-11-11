@@ -1,8 +1,10 @@
 # RUN: llvm-ifs --input-format=IFS --output-ifs - %s %S/func.ifs 2>&1 | \
 # RUN: FileCheck %s --check-prefixes=CHECK-IFS
+# RUN: llvm-ifs --input-format=IFS --output-ifs - %S/func.ifs %s 2>&1 | \
+# RUN: FileCheck %s --check-prefixes=CHECK-IFS
 
 # CHECK-IFS: Symbols:
-# CHECK-IFS-NEXT: - { Name: a, Type: Func, Weak: true }
+# CHECK-IFS-NEXT: - { Name: a, Type: Func }
 
 --- !ifs-v1
 IfsVersion: 3.0

@@ -163,7 +163,7 @@ generated IFS. If it conflicts with the input object file, an error will be
 reported and the program will stop.
 :::
 
-:::{option} --hint-ifs-target
+:::{option} --strip-ifs-arch
 This flag is optional and should only be used when outputting an IFS file.
 This flag strips the `Arch` field from the IFS file so it can be overridden
 later.
@@ -197,6 +197,23 @@ When this flag is set, llvm-ifs will remove the size field from the output ifs
 file. This is useful for shared objects that only intend to be linked against
 position independent code which doesn't need copy relocations, or where the size
 of an object is not a useful part of the abi to track.
+:::
+
+:::{option} --strip-undefined
+When this flag is set, llvm-ifs removes undefined symbols from each input stub
+before merging and writing output files.
+:::
+
+:::{option} --strip-needed
+When this flag is set, llvm-ifs removes `DT_NEEDED` (`NeededLibs`) entries from
+the output stub. Prefer combining this option with `--strip-undefined` when
+generating ELF stubs for static linking so linkers do not enforce unresolved
+checks on undefined symbols whose transitive `DT_NEEDED` libraries were removed.
+:::
+
+:::{option} --exclude=<glob>
+Remove symbols matching `<glob>` from each input stub before merging. May be
+specified multiple times.
 :::
 
 ## EXIT STATUS

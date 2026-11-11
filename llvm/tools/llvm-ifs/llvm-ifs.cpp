@@ -434,7 +434,11 @@ int llvm_ifs_main(int argc, char **argv, const llvm::ToolContext &) {
       }
     }
 
-    for (auto Symbol : TargetStub->Symbols) {
+    if (Error E =
+            filterIFSSyms(*TargetStub, Config.StripUndefined, Config.Exclude))
+      fatalError(std::move(E));
+
+    for (const IFSSymbol &Symbol : TargetStub->Symbols) {
       StringRef NameRef = Saver.save(Symbol.Name);
       StringRef VersionRef = Saver.save(Symbol.Version);
       if (!Symbol.Undefined && (Symbol.Default || Symbol.Version.empty())) {
@@ -484,8 +488,16 @@ int llvm_ifs_main(int argc, char **argv, const llvm::ToolContext &) {
 
         return -1;
       }
+      if (Symbol.Undefined != SI->second.Undefined) {
+        WithColor::error() << "Interface Stub: Undefined Mismatch for "
+                           << Symbol.Name << ".\nFilename: " << InputFilePath
+                           << "\nUndefined Values: " << SI->second.Undefined
+                           << " " << Symbol.Undefined << "\n";
+
+        return -1;
+      }
       if (Symbol.Weak != SI->second.Weak) {
-        Symbol.Weak = false;
+        SI->second.Weak = false;
         continue;
       }
       // TODO: Not checking Warning. Will be dropped.
@@ -517,11 +529,18 @@ int llvm_ifs_main(int argc, char **argv, const llvm::ToolContext &) {
   if (OverrideError)
     fatalError(std::move(OverrideError));
 
-  if (Config.StripNeeded)
+  if (Config.StripNeeded) {
     Stub.NeededLibs.clear();
-
-  if (Error E = filterIFSSyms(Stub, Config.StripUndefined, Config.Exclude))
-    fatalError(std::move(E));
+    if (!Config.StripUndefined &&
+        llvm::any_of(Stub.Symbols, [](const IFSSymbol &Sym) {
+          return Sym.Undefined && !Sym.Weak;
+        })) {
+      WithColor::warning()
+          << "--strip-needed is used without --strip-undefined while non-weak "
+             "undefined symbols remain; static linkers may fail with "
+             "unresolved symbol errors\n";
+    }
+  }
 
   if (Config.StripSize)
     for (IFSSymbol &Sym : Stub.Symbols)

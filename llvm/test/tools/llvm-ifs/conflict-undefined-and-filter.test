@@ -1,0 +1,34 @@
+## Test symbol merge validation (Undefined mismatch), pre-merge filtering
+## (--strip-undefined and --exclude before conflict checks), and the
+## --strip-needed without --strip-undefined warning.
+
+# RUN: %python -c "import sys; open(sys.argv[1], 'w').write('--- !ifs-v1\nIfsVersion: 3.0\nTarget: x86_64-unknown-linux-gnu\nNeededLibs: [libdep.so]\nSymbols:\n  - { Name: shared_fn, Type: Func, Undefined: true }\n  - { Name: only_undef, Type: Object, Size: 8, Undefined: true }\n  - { Name: internal_bad, Version: V1, Type: Func, Default: true }\n...\n')" %t.a.ifs
+# RUN: %python -c "import sys; open(sys.argv[1], 'w').write('--- !ifs-v1\nIfsVersion: 3.0\nTarget: x86_64-unknown-linux-gnu\nNeededLibs: [libdep.so]\nSymbols:\n  - { Name: shared_fn, Type: Func }\n  - { Name: only_undef, Type: Func, Undefined: true }\n  - { Name: internal_bad, Version: V2, Type: Object, Size: 4, Default: true }\n...\n')" %t.b.ifs
+
+## 1. Without --strip-undefined, defined vs undefined on the same symbol fails.
+# RUN: not llvm-ifs --input-format=IFS --exclude='internal_*' --output-ifs=- %t.a.ifs %t.b.ifs 2>&1 | FileCheck %s --check-prefix=UNDEF-ERR
+
+# UNDEF-ERR:      error: Interface Stub: Undefined Mismatch for shared_fn.
+# UNDEF-ERR-NEXT: Filename:
+# UNDEF-ERR-NEXT: Undefined Values: 1 0
+
+## 2. With --strip-undefined and --exclude='internal_*', pre-merge filtering
+##    removes both the undefined conflicts and excluded conflicts cleanly.
+# RUN: llvm-ifs --input-format=IFS --strip-undefined --exclude='internal_*' --output-ifs=- %t.a.ifs %t.b.ifs | FileCheck %s --check-prefix=FILTERED
+
+# FILTERED:      Symbols:
+# FILTERED-NEXT:   - { Name: shared_fn, Type: Func }
+# FILTERED-NEXT: ...
+
+## 3. --strip-needed without --strip-undefined warns when non-weak undefined
+##    symbols remain, and does not warn when --strip-undefined is also passed
+##    or when only weak undefined symbols remain.
+# RUN: llvm-ifs --input-format=IFS --strip-needed --output-ifs=%t.out.ifs %t.a.ifs 2>&1 | FileCheck %s --check-prefix=WARN-NEEDED
+# RUN: llvm-ifs --input-format=IFS --strip-needed --strip-undefined --output-ifs=%t.out2.ifs %t.a.ifs 2>%t.err2
+# RUN: FileCheck %s --allow-empty --check-prefix=NO-WARN < %t.err2
+# RUN: %python -c "import sys; open(sys.argv[1], 'w').write('--- !ifs-v1\nIfsVersion: 3.0\nTarget: x86_64-unknown-linux-gnu\nNeededLibs: [libdep.so]\nSymbols:\n  - { Name: weak_u, Type: Func, Undefined: true, Weak: true }\n...\n')" %t.weak.ifs
+# RUN: llvm-ifs --input-format=IFS --strip-needed --output-ifs=%t.out3.ifs %t.weak.ifs 2>%t.err3
+# RUN: FileCheck %s --allow-empty --check-prefix=NO-WARN < %t.err3
+
+# WARN-NEEDED: warning: --strip-needed is used without --strip-undefined while non-weak undefined symbols remain
+# NO-WARN-NOT: warning:
