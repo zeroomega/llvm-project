@@ -7,6 +7,8 @@
 //===-----------------------------------------------------------------------===/
 
 #include "ErrorCollector.h"
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/BinaryFormat/ELF.h"
@@ -17,12 +19,14 @@
 #include "llvm/Option/Arg.h"
 #include "llvm/Option/ArgList.h"
 #include "llvm/Option/Option.h"
+#include "llvm/Support/Allocator.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Driver.h"
 #include "llvm/Support/Errc.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/Support/StringSaver.h"
 #include "llvm/Support/VersionTuple.h"
 #include "llvm/Support/WithColor.h"
 #include "llvm/Support/YAMLTraits.h"
@@ -33,6 +37,7 @@
 #include "llvm/TextAPI/TextAPIWriter.h"
 #include <optional>
 #include <string>
+#include <tuple>
 #include <vector>
 
 using namespace llvm;
@@ -377,7 +382,9 @@ int llvm_ifs_main(int argc, char **argv, const llvm::ToolContext &) {
 
   // Attempt to merge input.
   IFSStub Stub;
-  std::map<std::tuple<std::string, std::string>, IFSSymbol> SymbolMap;
+  BumpPtrAllocator Alloc;
+  UniqueStringSaver Saver(Alloc);
+  DenseMap<std::tuple<StringRef, StringRef>, IFSSymbol> SymbolMap;
   std::string PreviousInputFilePath;
   for (const std::string &InputFilePath : Config.InputFilePaths) {
     Expected<std::unique_ptr<IFSStub>> StubOrErr =
@@ -427,8 +434,8 @@ int llvm_ifs_main(int argc, char **argv, const llvm::ToolContext &) {
     }
 
     for (auto Symbol : TargetStub->Symbols) {
-      auto [SI, Inserted] =
-          SymbolMap.try_emplace({Symbol.Name, Symbol.Version}, Symbol);
+      auto [SI, Inserted] = SymbolMap.try_emplace(
+          {Saver.save(Symbol.Name), Saver.save(Symbol.Version)}, Symbol);
       if (Inserted)
         continue;
 
@@ -477,8 +484,10 @@ int llvm_ifs_main(int argc, char **argv, const llvm::ToolContext &) {
       return -1;
     }
 
-  for (const auto &[Name, Symbol] : SymbolMap)
-    Stub.Symbols.push_back(Symbol);
+  Stub.Symbols.reserve(SymbolMap.size());
+  for (auto &[Name, Symbol] : SymbolMap)
+    Stub.Symbols.push_back(std::move(Symbol));
+  llvm::sort(Stub.Symbols);
 
   // Change SoName before emitting stubs.
   if (Config.SoName)

@@ -7,6 +7,8 @@
 //===-----------------------------------------------------------------------===/
 
 #include "llvm/InterfaceStub/ELFObjHandler.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringMap.h"
 #include "llvm/InterfaceStub/IFSStub.h"
 #include "llvm/MC/StringTableBuilder.h"
 #include "llvm/Object/Binary.h"
@@ -17,7 +19,6 @@
 #include "llvm/Support/FileOutputBuffer.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/MemoryBuffer.h"
-#include <map>
 #include <optional>
 
 using llvm::object::ELFObjectFile;
@@ -290,7 +291,7 @@ public:
     if (Stub.SoName)
       DynStr.Content.add(*Stub.SoName);
 
-    std::vector<OutputSection<ELFT> *> Sections;
+    SmallVector<OutputSection<ELFT> *, 6> Sections;
     Sections.push_back(&DynSym);
     Sections.push_back(&DynStr);
     if (HasVersion) {
@@ -324,7 +325,7 @@ public:
     }
     DynSym.Size = DynSym.Content.getSize();
 
-    std::map<std::string, size_t> VerDefMap;
+    StringMap<size_t> VerDefMap;
     size_t Vdndx = 0;
 
     {
@@ -338,19 +339,20 @@ public:
     }
 
     // Populate dynamic symbol version table and version definition table.
-    for (const IFSSymbol &Sym : Stub.Symbols)
-      if (Sym.Version.empty())
+    for (const IFSSymbol &Sym : Stub.Symbols) {
+      if (Sym.Version.empty()) {
         VerSym.Content.add(VER_NDX_GLOBAL);
-      else {
-        const auto &[VI, Inserted] = VerDefMap.insert({Sym.Version, Vdndx});
-        const auto &[Name, Ndx] = *VI;
-        if (Inserted) {
-          VerDef.Content.addDef(Vdndx, 1, hashSysV(Name));
-          VerDef.Content.addAux(Vdndx, DynStr.Content.getOffset(Name));
-          Vdndx++;
-        }
-        VerSym.Content.add(Sym.Default ? Ndx : (Ndx | VERSYM_HIDDEN));
+        continue;
       }
+      auto [VI, Inserted] = VerDefMap.try_emplace(Sym.Version, Vdndx);
+      size_t Ndx = VI->second;
+      if (Inserted) {
+        VerDef.Content.addDef(Vdndx, 1, hashSysV(Sym.Version));
+        VerDef.Content.addAux(Vdndx, DynStr.Content.getOffset(Sym.Version));
+        Vdndx++;
+      }
+      VerSym.Content.add(Sym.Default ? Ndx : (Ndx | VERSYM_HIDDEN));
+    }
     VerDef.Content.finalize();
     VerDef.Size = VerDef.Content.getSize();
     VerSym.Size = VerSym.Content.getSize();
@@ -416,18 +418,18 @@ public:
     DynStr.Content.write(Data + DynStr.Shdr.sh_offset);
     DynTab.Content.write(Data + DynTab.Shdr.sh_offset);
     ShStrTab.Content.write(Data + ShStrTab.Shdr.sh_offset);
-    if (HasVersion)
+    if (HasVersion) {
       VerSym.Content.write(Data + VerSym.Shdr.sh_offset);
-    if (HasVersion)
       VerDef.Content.write(Data + VerDef.Shdr.sh_offset);
+    }
     writeShdr(Data, DynSym);
     writeShdr(Data, DynStr);
     writeShdr(Data, DynTab);
     writeShdr(Data, ShStrTab);
-    if (HasVersion)
+    if (HasVersion) {
       writeShdr(Data, VerSym);
-    if (HasVersion)
       writeShdr(Data, VerDef);
+    }
   }
 
 private:
@@ -726,7 +728,7 @@ static Error populateDynamic(DynamicEntries &Dyn,
 template <class ELFT>
 static IFSSymbol createELFSym(StringRef SymName, StringRef SymVer, bool Default,
                               const typename ELFT::Sym &RawSym) {
-  IFSSymbol TargetSym{SymName.str()};
+  IFSSymbol TargetSym{SymName};
   uint8_t Binding = RawSym.getBinding();
   // Treat STB_GNU_UNIQUE like STB_WEAK for interface stubs.
   TargetSym.Weak = Binding == STB_WEAK || Binding == STB_GNU_UNIQUE;
@@ -929,18 +931,14 @@ Expected<std::unique_ptr<IFSStub>> readELFFile(MemoryBufferRef Buf) {
   }
 
   Binary *Bin = BinOrErr->get();
-  if (auto *Obj = dyn_cast<ELFObjectFile<ELF32LE>>(Bin)) {
+  if (auto *Obj = dyn_cast<ELFObjectFile<ELF32LE>>(Bin))
     return buildStub(*Obj);
-  }
-  if (auto *Obj = dyn_cast<ELFObjectFile<ELF64LE>>(Bin)) {
+  if (auto *Obj = dyn_cast<ELFObjectFile<ELF64LE>>(Bin))
     return buildStub(*Obj);
-  }
-  if (auto *Obj = dyn_cast<ELFObjectFile<ELF32BE>>(Bin)) {
+  if (auto *Obj = dyn_cast<ELFObjectFile<ELF32BE>>(Bin))
     return buildStub(*Obj);
-  }
-  if (auto *Obj = dyn_cast<ELFObjectFile<ELF64BE>>(Bin)) {
+  if (auto *Obj = dyn_cast<ELFObjectFile<ELF64BE>>(Bin))
     return buildStub(*Obj);
-  }
   return createStringError(errc::not_supported, "unsupported binary format");
 }
 
@@ -951,43 +949,15 @@ Error writeBinaryStub(StringRef FilePath, const IFSStub &Stub,
   assert(Stub.Target.Arch);
   assert(Stub.Target.BitWidth);
   assert(Stub.Target.Endianness);
-  Error (*WriteELF)(StringRef, const IFSStub &, bool) = nullptr;
-  switch (*Stub.Target.BitWidth) {
-  case IFSBitWidthType::IFS32: {
-    switch (*Stub.Target.Endianness) {
-    case IFSEndiannessType::Little: {
-      WriteELF = writeELFBinaryToFile<ELF32LE>;
-      break;
-    }
-    case IFSEndiannessType::Big: {
-      WriteELF = writeELFBinaryToFile<ELF32BE>;
-      break;
-    }
-    case IFSEndiannessType::Unknown:
-      break;
-    }
-    break;
+  if (Stub.Target.BitWidth == IFSBitWidthType::IFS32) {
+    if (Stub.Target.Endianness == IFSEndiannessType::Little)
+      return writeELFBinaryToFile<ELF32LE>(FilePath, Stub, WriteIfChanged);
+    return writeELFBinaryToFile<ELF32BE>(FilePath, Stub, WriteIfChanged);
   }
-  case IFSBitWidthType::IFS64: {
-    switch (*Stub.Target.Endianness) {
-    case IFSEndiannessType::Little: {
-      WriteELF = writeELFBinaryToFile<ELF64LE>;
-      break;
-    }
-    case IFSEndiannessType::Big: {
-      WriteELF = writeELFBinaryToFile<ELF64BE>;
-      break;
-    }
-    case IFSEndiannessType::Unknown:
-      break;
-    }
-    break;
-  }
-  case IFSBitWidthType::Unknown:
-    break;
-  }
-  if (WriteELF) {
-    return WriteELF(FilePath, Stub, WriteIfChanged);
+  if (Stub.Target.BitWidth == IFSBitWidthType::IFS64) {
+    if (Stub.Target.Endianness == IFSEndiannessType::Little)
+      return writeELFBinaryToFile<ELF64LE>(FilePath, Stub, WriteIfChanged);
+    return writeELFBinaryToFile<ELF64BE>(FilePath, Stub, WriteIfChanged);
   }
   llvm_unreachable("invalid binary output target");
 }
