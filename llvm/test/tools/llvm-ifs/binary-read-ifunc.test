@@ -1,0 +1,254 @@
+## Test reading ELF shared objects containing STT_GNU_IFUNC symbols (both
+## unversioned and versioned) and emitting IFS and ELF stubs. Static linkers
+## treat STT_GNU_IFUNC in shared objects identically to STT_FUNC, so llvm-ifs
+## maps them to Func.
+
+# RUN: yaml2obj --docnum=1 %s -o %t.so
+# RUN: llvm-ifs --input-format=ELF --output-ifs=%t.ifs %t.so
+# RUN: FileCheck %s --check-prefix=IFS < %t.ifs
+# RUN: llvm-ifs --input-format=ELF --output-elf=%t.stub.so %t.so
+# RUN: llvm-readobj --dyn-symbols %t.stub.so | FileCheck %s --check-prefix=ELF
+# RUN: llvm-ifs --input-format=ELF --output-ifs=%t.rt.ifs %t.stub.so
+# RUN: diff -u %t.ifs %t.rt.ifs
+# RUN: llvm-ifs --input-format=IFS --output-elf=%t.from_ifs.so %t.ifs
+# RUN: llvm-readobj --dyn-symbols %t.from_ifs.so | FileCheck %s --check-prefix=ELF
+
+# RUN: yaml2obj --docnum=2 %s -o %t.ver.so
+# RUN: llvm-ifs --input-format=ELF --output-ifs=%t.ver.ifs --output-elf=%t.ver.stub.so %t.ver.so
+# RUN: FileCheck %s --check-prefix=VER-IFS < %t.ver.ifs
+# RUN: llvm-readelf --dyn-syms -V %t.ver.stub.so | FileCheck %s --check-prefix=VER-ELF
+# RUN: llvm-ifs --input-format=ELF --output-ifs=%t.ver.rt.ifs %t.ver.stub.so
+# RUN: diff -u %t.ver.ifs %t.ver.rt.ifs
+
+# IFS:      --- !ifs-v1
+# IFS-NEXT: IfsVersion:      3.0
+# IFS-NEXT: Target:          { ObjectFormat: ELF, Arch: x86_64, Endianness: little, BitWidth: 64 }
+# IFS-NEXT: Symbols:
+# IFS-NEXT:   - { Name: ifunc_global, Type: Func }
+# IFS-NEXT:   - { Name: ifunc_protected, Type: Func }
+# IFS-NEXT:   - { Name: ifunc_undef, Type: Func, Undefined: true }
+# IFS-NEXT:   - { Name: ifunc_weak, Type: Func, Weak: true }
+# IFS-NEXT:   - { Name: normal_func, Type: Func }
+# IFS-NEXT: ...
+
+# ELF:      DynamicSymbols [
+# ELF-NEXT:   Symbol {
+# ELF-NEXT:     Name:  (0)
+# ELF-NEXT:     Value: 0x0
+# ELF-NEXT:     Size: 0
+# ELF-NEXT:     Binding: Local
+# ELF-NEXT:     Type: None
+# ELF-NEXT:     Other: 0
+# ELF-NEXT:     Section: Undefined
+# ELF-NEXT:   }
+# ELF-NEXT:   Symbol {
+# ELF-NEXT:     Name: ifunc_global
+# ELF-NEXT:     Value:
+# ELF-NEXT:     Size: 0
+# ELF-NEXT:     Binding: Global
+# ELF-NEXT:     Type: Function
+# ELF-NEXT:     Other: 0
+# ELF-NEXT:     Section: .dynsym
+# ELF-NEXT:   }
+# ELF-NEXT:   Symbol {
+# ELF-NEXT:     Name: ifunc_protected
+# ELF-NEXT:     Value:
+# ELF-NEXT:     Size: 0
+# ELF-NEXT:     Binding: Global
+# ELF-NEXT:     Type: Function
+# ELF-NEXT:     Other: 0
+# ELF-NEXT:     Section: .dynsym
+# ELF-NEXT:   }
+# ELF-NEXT:   Symbol {
+# ELF-NEXT:     Name: ifunc_undef
+# ELF-NEXT:     Value: 0x0
+# ELF-NEXT:     Size: 0
+# ELF-NEXT:     Binding: Global
+# ELF-NEXT:     Type: Function
+# ELF-NEXT:     Other: 0
+# ELF-NEXT:     Section: Undefined
+# ELF-NEXT:   }
+# ELF-NEXT:   Symbol {
+# ELF-NEXT:     Name: ifunc_weak
+# ELF-NEXT:     Value:
+# ELF-NEXT:     Size: 0
+# ELF-NEXT:     Binding: Weak
+# ELF-NEXT:     Type: Function
+# ELF-NEXT:     Other: 0
+# ELF-NEXT:     Section: .dynsym
+# ELF-NEXT:   }
+# ELF-NEXT:   Symbol {
+# ELF-NEXT:     Name: normal_func
+# ELF-NEXT:     Value:
+# ELF-NEXT:     Size: 0
+# ELF-NEXT:     Binding: Global
+# ELF-NEXT:     Type: Function
+# ELF-NEXT:     Other: 0
+# ELF-NEXT:     Section: .dynsym
+# ELF-NEXT:   }
+# ELF-NEXT: ]
+
+# VER-IFS:      Symbols:
+# VER-IFS-NEXT:   - { Name: __gettimeofday, Version: GLIBC_2.0, Type: Func }
+# VER-IFS-NEXT:   - { Name: __gettimeofday, Version: GLIBC_2.2.5, Type: Func, Default: true }
+
+# VER-ELF:      FUNC    GLOBAL DEFAULT    1 __gettimeofday@GLIBC_2.0{{$}}
+# VER-ELF-NEXT: FUNC    GLOBAL DEFAULT    1 __gettimeofday@@GLIBC_2.2.5{{$}}
+
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  OSABI:   ELFOSABI_GNU
+  Type:    ET_DYN
+  Machine: EM_X86_64
+Sections:
+  - Name:         .dynsym
+    Type:         SHT_DYNSYM
+    Flags:        [ SHF_ALLOC ]
+    Address:      0x100
+    AddressAlign: 0x8
+  - Name:         .dynstr
+    Type:         SHT_STRTAB
+    Flags:        [ SHF_ALLOC ]
+    Address:      0x200
+    AddressAlign: 0x1
+  - Name:         .text
+    Type:         SHT_PROGBITS
+    Flags:        [ SHF_ALLOC, SHF_EXECINSTR ]
+    Address:      0x300
+    AddressAlign: 0x10
+  - Name:         .dynamic
+    Type:         SHT_DYNAMIC
+    Flags:        [ SHF_ALLOC, SHF_WRITE ]
+    Address:      0x400
+    AddressAlign: 0x8
+    Entries:
+      - Tag:   DT_SYMTAB
+        Value: 0x100
+      - Tag:   DT_STRTAB
+        Value: 0x200
+      - Tag:   DT_STRSZ
+        Value: 0x60
+      - Tag:   DT_NULL
+        Value: 0x0
+DynamicSymbols:
+  - Name:       ifunc_global
+    Type:       STT_GNU_IFUNC
+    Section:    .text
+    Binding:    STB_GLOBAL
+    Size:       32
+  - Name:       ifunc_protected
+    Type:       STT_GNU_IFUNC
+    Section:    .text
+    Binding:    STB_GLOBAL
+    Other:      [ STV_PROTECTED ]
+    Size:       24
+  - Name:       ifunc_hidden
+    Type:       STT_GNU_IFUNC
+    Section:    .text
+    Binding:    STB_GLOBAL
+    Other:      [ STV_HIDDEN ]
+    Size:       16
+  - Name:       ifunc_undef
+    Type:       STT_GNU_IFUNC
+    Binding:    STB_GLOBAL
+  - Name:       ifunc_weak
+    Type:       STT_GNU_IFUNC
+    Section:    .text
+    Binding:    STB_WEAK
+    Size:       16
+  - Name:       normal_func
+    Type:       STT_FUNC
+    Section:    .text
+    Binding:    STB_GLOBAL
+    Size:       16
+ProgramHeaders:
+  - Type:     PT_LOAD
+    Flags:    [ PF_R, PF_X ]
+    VAddr:    0x100
+    FirstSec: .dynsym
+    LastSec:  .text
+  - Type:     PT_LOAD
+    Flags:    [ PF_R, PF_W ]
+    VAddr:    0x400
+    FirstSec: .dynamic
+    LastSec:  .dynamic
+  - Type:     PT_DYNAMIC
+    Flags:    [ PF_R, PF_W ]
+    VAddr:    0x400
+    FirstSec: .dynamic
+    LastSec:  .dynamic
+
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  OSABI:   ELFOSABI_GNU
+  Type:    ET_DYN
+  Machine: EM_X86_64
+Sections:
+  - Name:  .dynstr
+    Type:  SHT_STRTAB
+    Flags: [ SHF_ALLOC ]
+  - Name:  .dynsym
+    Type:  SHT_DYNSYM
+    Flags: [ SHF_ALLOC ]
+    Link:  .dynstr
+  - Name:    .gnu.version
+    Type:    SHT_GNU_versym
+    Flags:   [ SHF_ALLOC ]
+    Link:    .dynsym
+    Entries: [ 0, 0x8002, 3 ]
+  - Name:         .gnu.version_d
+    Type:         SHT_GNU_verdef
+    Flags:        [ SHF_ALLOC ]
+    AddressAlign: 4
+    Link:         .dynstr
+    Info:         3
+    Entries:
+      - VersionNdx: 1
+        Flags:      1
+        Names:      [ libc.so.6 ]
+      - VersionNdx: 2
+        Names:      [ GLIBC_2.0 ]
+      - VersionNdx: 3
+        Names:      [ GLIBC_2.2.5 ]
+  - Name:  .text
+    Type:  SHT_PROGBITS
+    Flags: [ SHF_ALLOC, SHF_EXECINSTR ]
+  - Name:  .dynamic
+    Type:  SHT_DYNAMIC
+    Flags: [ SHF_ALLOC ]
+    Link:  .dynstr
+    Entries:
+      - Tag:   DT_STRTAB
+        Value: 0
+      - Tag:   DT_STRSZ
+        Value: 0x100
+      - Tag:   DT_SYMTAB
+        Value: 0
+      - Tag:   DT_SONAME
+        Value: 1
+      - Tag:   DT_NULL
+        Value: 0
+DynamicSymbols:
+  - Name:    '__gettimeofday (1)'
+    Type:    STT_GNU_IFUNC
+    Section: .text
+    Binding: STB_GLOBAL
+    Size:    32
+  - Name:    '__gettimeofday (2)'
+    Type:    STT_GNU_IFUNC
+    Section: .text
+    Binding: STB_GLOBAL
+    Size:    32
+ProgramHeaders:
+  - Type:     PT_LOAD
+    Flags:    [ PF_R, PF_X ]
+    FirstSec: .dynstr
+    LastSec:  .dynamic
+  - Type:     PT_DYNAMIC
+    Flags:    [ PF_R ]
+    FirstSec: .dynamic
+    LastSec:  .dynamic

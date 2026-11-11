@@ -123,6 +123,7 @@ IFSSymbolType ifs::convertELFSymbolTypeToIFS(uint8_t SymbolType) {
   case ELF::STT_OBJECT:
     return IFSSymbolType::Object;
   case ELF::STT_FUNC:
+  case ELF::STT_GNU_IFUNC:
     return IFSSymbolType::Func;
   case ELF::STT_TLS:
     return IFSSymbolType::TLS;

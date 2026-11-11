@@ -148,7 +148,8 @@ LLVM_ABI IFSEndiannessType convertELFEndiannessToIFS(uint8_t Endianness);
 
 /// This function extracts symbol type from a symbol's st_info member and
 /// maps it to an IFSSymbolType enum.
-/// Currently, STT_NOTYPE, STT_OBJECT, STT_FUNC, and STT_TLS are supported.
+/// Currently, STT_NOTYPE, STT_OBJECT, STT_FUNC, STT_GNU_IFUNC, and STT_TLS are
+/// supported.
 /// Other symbol types are mapped to IFSSymbolType::Unknown.
 ///
 /// @param SymbolType Binary symbol st_info to extract symbol type from.

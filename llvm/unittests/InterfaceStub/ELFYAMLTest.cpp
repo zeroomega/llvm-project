@@ -74,6 +74,7 @@ TEST(ElfYamlTextAPI, YAMLReadsInvalidSymbols) {
   ASSERT_THAT_ERROR(
       StubOrErr.takeError(),
       FailedWithMessage("IFS symbol type for symbol 'not' is unsupported"));
+  EXPECT_EQ(convertELFSymbolTypeToIFS(ELF::STT_GNU_IFUNC), IFSSymbolType::Func);
 
   const char DefaultWithoutVersion[] =
       "--- !ifs-v1\n"

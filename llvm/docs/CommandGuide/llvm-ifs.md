@@ -54,7 +54,7 @@ Symbols:
 
   - `Name`: Symbol name.
   - `Version` (optional): Symbol version.
-  - `Type`: Whether the symbol is an object, function, no-type, thread local storage, or unknown. Symbol types not explicitly supported are mapped as unknown to improve signal-to-noise ratio.
+  - `Type`: Whether the symbol is an object, function, no-type, thread local storage, or unknown. ELF `STT_GNU_IFUNC` symbols are mapped to `Func`. Symbol types not explicitly supported are mapped as unknown to improve signal-to-noise ratio.
   - `Size`: The size of the symbol in question, doesn't apply to functions, and is optional for NoType symbols.
   - `Default`: Whether or not a defined versioned symbol is the default (`@@Version`) version in this shared object file. Defaults to `false` (emitting a non-default `@Version` symbol when `Version` is specified).
   - `Undefined`: Whether or not the symbol is defined in this shared object file.
