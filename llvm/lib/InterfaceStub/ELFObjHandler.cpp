@@ -331,8 +331,22 @@ public:
     VerNeed.Name = ".gnu.version_r";
     VerNeed.Align = sizeof(Elf_Addr);
 
-    // Populate string tables.
+    // Validate symbol versioning invariants and populate string tables.
+    StringMap<StringRef> DefaultVersionByName;
     for (const IFSSymbol &Sym : Stub.Symbols) {
+      if (Sym.Default && (Sym.Version.empty() || Sym.Undefined))
+        return createStringError(
+            errc::invalid_argument,
+            "IFS symbol '" + Sym.Name +
+                "' cannot be marked Default without a defined Version");
+      if (!Sym.Undefined && (Sym.Default || Sym.Version.empty())) {
+        auto [DI, Inserted] =
+            DefaultVersionByName.try_emplace(Sym.Name, Sym.Version);
+        if (!Inserted)
+          return createStringError(errc::invalid_argument,
+                                   "IFS symbol '" + Sym.Name +
+                                       "' has multiple default definitions");
+      }
       DynStr.Content.add(Sym.Name);
       if (!Sym.Version.empty()) {
         DynStr.Content.add(Sym.Version);

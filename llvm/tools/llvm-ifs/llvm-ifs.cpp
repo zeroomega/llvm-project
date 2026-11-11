@@ -385,6 +385,7 @@ int llvm_ifs_main(int argc, char **argv, const llvm::ToolContext &) {
   BumpPtrAllocator Alloc;
   UniqueStringSaver Saver(Alloc);
   DenseMap<std::tuple<StringRef, StringRef>, IFSSymbol> SymbolMap;
+  DenseMap<StringRef, StringRef> DefaultVersionByName;
   std::string PreviousInputFilePath;
   for (const std::string &InputFilePath : Config.InputFilePaths) {
     Expected<std::unique_ptr<IFSStub>> StubOrErr =
@@ -434,8 +435,25 @@ int llvm_ifs_main(int argc, char **argv, const llvm::ToolContext &) {
     }
 
     for (auto Symbol : TargetStub->Symbols) {
-      auto [SI, Inserted] = SymbolMap.try_emplace(
-          {Saver.save(Symbol.Name), Saver.save(Symbol.Version)}, Symbol);
+      StringRef NameRef = Saver.save(Symbol.Name);
+      StringRef VersionRef = Saver.save(Symbol.Version);
+      if (!Symbol.Undefined && (Symbol.Default || Symbol.Version.empty())) {
+        auto [DI, DefaultInserted] =
+            DefaultVersionByName.try_emplace(NameRef, VersionRef);
+        if (!DefaultInserted && DI->second != VersionRef) {
+          auto FormatVer = [](StringRef V) {
+            return V.empty() ? StringRef("<unversioned>") : V;
+          };
+          WithColor::error() << "Interface Stub: Multiple Default Versions for "
+                             << Symbol.Name << ".\nFilename: " << InputFilePath
+                             << "\nVersion Values: " << FormatVer(DI->second)
+                             << " " << FormatVer(VersionRef) << "\n";
+          return -1;
+        }
+      }
+
+      auto [SI, Inserted] =
+          SymbolMap.try_emplace({NameRef, VersionRef}, Symbol);
       if (Inserted)
         continue;
 

@@ -6,11 +6,14 @@
 //
 //===-----------------------------------------------------------------------===/
 
+#include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/BinaryFormat/ELF.h"
+#include "llvm/InterfaceStub/ELFObjHandler.h"
 #include "llvm/InterfaceStub/IFSHandler.h"
 #include "llvm/InterfaceStub/IFSStub.h"
 #include "llvm/Support/Error.h"
+#include "llvm/Support/FileSystem.h"
 #include "llvm/Testing/Support/Error.h"
 #include "gtest/gtest.h"
 #include <string>
@@ -95,6 +98,73 @@ TEST(ElfYamlTextAPI, YAMLReadsInvalidSymbols) {
   ASSERT_THAT_ERROR(readIFSFromBuffer(DefaultOnUndefined).takeError(),
                     FailedWithMessage("IFS symbol 'ext' cannot be marked "
                                       "Default without a defined Version"));
+
+  const char MultipleDefaults[] =
+      "--- !ifs-v1\n"
+      "IfsVersion: 3.0\n"
+      "Target: x86_64-unknown-linux-gnu\n"
+      "Symbols:\n"
+      "  - { Name: foo, Version: V1, Type: Func, Default: true }\n"
+      "  - { Name: foo, Version: V2, Type: Func, Default: true }\n"
+      "...\n";
+  ASSERT_THAT_ERROR(
+      readIFSFromBuffer(MultipleDefaults).takeError(),
+      FailedWithMessage("IFS symbol 'foo' has multiple default definitions"));
+
+  const char UnversionedPlusDefault[] =
+      "--- !ifs-v1\n"
+      "IfsVersion: 3.0\n"
+      "Target: x86_64-unknown-linux-gnu\n"
+      "Symbols:\n"
+      "  - { Name: foo, Type: Func }\n"
+      "  - { Name: foo, Version: V1, Type: Func, Default: true }\n"
+      "...\n";
+  ASSERT_THAT_ERROR(
+      readIFSFromBuffer(UnversionedPlusDefault).takeError(),
+      FailedWithMessage("IFS symbol 'foo' has multiple default definitions"));
+
+  // One default version plus non-default compatibility versions and versioned
+  // undefined references is valid.
+  const char ValidDefaultAndCompat[] =
+      "--- !ifs-v1\n"
+      "IfsVersion: 3.0\n"
+      "Target: x86_64-unknown-linux-gnu\n"
+      "Symbols:\n"
+      "  - { Name: foo, Version: V1, Type: Func }\n"
+      "  - { Name: foo, Version: V2, Type: Func, Default: true }\n"
+      "  - { Name: bar, Type: Func }\n"
+      "  - { Name: bar, Version: V1, Type: Func }\n"
+      "  - { Name: ext, Version: V1, Type: Func, Undefined: true }\n"
+      "  - { Name: ext, Version: V2, Type: Func, Undefined: true }\n"
+      "...\n";
+  ASSERT_THAT_ERROR(readIFSFromBuffer(ValidDefaultAndCompat).takeError(),
+                    Succeeded());
+
+  // Direct C++ writeBinaryStub API also enforces single-default invariants.
+  SmallString<128> TempPath;
+  ASSERT_FALSE(sys::fs::createTemporaryFile("ifs-stub", "so", TempPath));
+  struct Cleanup {
+    StringRef Path;
+    ~Cleanup() { sys::fs::remove(Path); }
+  } RemoveTemp{TempPath};
+
+  IFSStub BadStub;
+  BadStub.IfsVersion = VersionTuple(3, 0);
+  BadStub.Target.Arch = ELF::EM_X86_64;
+  BadStub.Target.BitWidth = IFSBitWidthType::IFS64;
+  BadStub.Target.Endianness = IFSEndiannessType::Little;
+  IFSSymbol S1("dup");
+  S1.Version = "V1";
+  S1.Type = IFSSymbolType::Func;
+  S1.Default = true;
+  IFSSymbol S2("dup");
+  S2.Version = "V2";
+  S2.Type = IFSSymbolType::Func;
+  S2.Default = true;
+  BadStub.Symbols = {S1, S2};
+  ASSERT_THAT_ERROR(
+      writeBinaryStub(TempPath, BadStub, /*WriteIfChanged=*/false),
+      FailedWithMessage("IFS symbol 'dup' has multiple default definitions"));
 }
 
 TEST(ElfYamlTextAPI, YAMLReadsTBESymbols) {

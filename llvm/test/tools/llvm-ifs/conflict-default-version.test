@@ -1,0 +1,233 @@
+## Test that llvm-ifs rejects multiple default definitions (unversioned or
+## Default: true) for the same symbol name while allowing non-default (@)
+## compatibility versions, identical multi-file merges, and multiple versioned
+## undefined symbols.
+
+## 1. Single IFS file with two Default: true versions for the same symbol.
+# RUN: %python -c "import sys; open(sys.argv[1], 'w').write('--- !ifs-v1\nIfsVersion: 3.0\nTarget: x86_64-unknown-linux-gnu\nSymbols:\n  - { Name: foo, Version: V1, Type: Func, Default: true }\n  - { Name: foo, Version: V2, Type: Func, Default: true }\n...\n')" %t.single_two_def.ifs
+# RUN: not llvm-ifs --input-format=IFS --output-ifs=- %t.single_two_def.ifs 2>&1 | FileCheck %s --check-prefix=SINGLE-ERR
+
+## 2. Single IFS file mixing unversioned and Default: true definitions.
+# RUN: %python -c "import sys; open(sys.argv[1], 'w').write('--- !ifs-v1\nIfsVersion: 3.0\nTarget: x86_64-unknown-linux-gnu\nSymbols:\n  - { Name: foo, Type: Func }\n  - { Name: foo, Version: V1, Type: Func, Default: true }\n...\n')" %t.single_unver_def.ifs
+# RUN: not llvm-ifs --input-format=IFS --output-ifs=- %t.single_unver_def.ifs 2>&1 | FileCheck %s --check-prefix=SINGLE-ERR
+
+# SINGLE-ERR: error: IFS symbol 'foo' has multiple default definitions
+
+## 3. Merging two IFS files with conflicting Default: true versions (V1 vs V2),
+##    and merging two IFS files with identical Default: true version (V1 == V1).
+# RUN: %python -c "import sys; open(sys.argv[1], 'w').write('--- !ifs-v1\nIfsVersion: 3.0\nTarget: x86_64-unknown-linux-gnu\nSymbols:\n  - { Name: foo, Version: V1, Type: Func, Default: true }\n...\n')" %t.v1.ifs
+# RUN: %python -c "import sys; open(sys.argv[1], 'w').write('--- !ifs-v1\nIfsVersion: 3.0\nTarget: x86_64-unknown-linux-gnu\nSymbols:\n  - { Name: foo, Version: V2, Type: Func, Default: true }\n...\n')" %t.v2.ifs
+# RUN: %python -c "import sys; open(sys.argv[1], 'w').write('--- !ifs-v1\nIfsVersion: 3.0\nTarget: x86_64-unknown-linux-gnu\nSymbols:\n  - { Name: foo, Type: Func }\n...\n')" %t.unver.ifs
+# RUN: not llvm-ifs --input-format=IFS --output-ifs=- %t.v1.ifs %t.v2.ifs 2>&1 | FileCheck %s --check-prefix=MERGE-V1-V2
+# RUN: not llvm-ifs --input-format=IFS --output-ifs=- %t.unver.ifs %t.v1.ifs 2>&1 | FileCheck %s --check-prefix=MERGE-UNVER-V1
+# RUN: llvm-ifs --input-format=IFS --output-ifs=- %t.v1.ifs %t.v1.ifs | FileCheck %s --check-prefix=SAME-DEFAULT
+
+# MERGE-V1-V2:      error: Interface Stub: Multiple Default Versions for foo.
+# MERGE-V1-V2-NEXT: Filename:
+# MERGE-V1-V2-NEXT: Version Values: V1 V2
+
+# MERGE-UNVER-V1:      error: Interface Stub: Multiple Default Versions for foo.
+# MERGE-UNVER-V1-NEXT: Filename:
+# MERGE-UNVER-V1-NEXT: Version Values: <unversioned> V1
+
+# SAME-DEFAULT:      Symbols:
+# SAME-DEFAULT-NEXT:   - { Name: foo, Version: V1, Type: Func, Default: true }
+
+## 4. Corrupt ELF input defining two @@ default versions for the same symbol.
+# RUN: yaml2obj --docnum=1 %s -o %t.bad.so
+# RUN: not llvm-ifs --input-format=ELF --output-ifs=- %t.bad.so 2>&1 | FileCheck %s --check-prefix=MERGE-V1-V2
+
+## 5. Valid combination: one default version + non-default compatibility
+##    versions + unversioned + non-default + multiple versioned undefineds.
+# RUN: yaml2obj --docnum=2 %s -o %t.valid.so
+# RUN: llvm-ifs --input-format=ELF --output-ifs=%t.valid.ifs --output-elf=%t.valid.stub.so %t.valid.so
+# RUN: FileCheck %s --check-prefix=VALID-IFS < %t.valid.ifs
+# RUN: llvm-ifs --input-format=ELF --output-ifs=%t.valid.rt.ifs %t.valid.stub.so
+# RUN: diff -u %t.valid.ifs %t.valid.rt.ifs
+
+# VALID-IFS:      Symbols:
+# VALID-IFS-NEXT:   - { Name: bar, Type: Func }
+# VALID-IFS-NEXT:   - { Name: bar, Version: V1, Type: Func }
+# VALID-IFS-NEXT:   - { Name: ext, Version: V1, Type: Func, Undefined: true }
+# VALID-IFS-NEXT:   - { Name: ext, Version: V2, Type: Func, Undefined: true }
+# VALID-IFS-NEXT:   - { Name: foo, Version: V0, Type: Func }
+# VALID-IFS-NEXT:   - { Name: foo, Version: V1, Type: Func }
+# VALID-IFS-NEXT:   - { Name: foo, Version: V2, Type: Func, Default: true }
+
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  Type:    ET_DYN
+  Machine: EM_X86_64
+Sections:
+  - Name:  .dynstr
+    Type:  SHT_STRTAB
+    Flags: [ SHF_ALLOC ]
+  - Name:  .dynsym
+    Type:  SHT_DYNSYM
+    Flags: [ SHF_ALLOC ]
+    Link:  .dynstr
+  - Name:    .gnu.version
+    Type:    SHT_GNU_versym
+    Flags:   [ SHF_ALLOC ]
+    Link:    .dynsym
+    Entries: [ 0, 2, 3 ]
+  - Name:         .gnu.version_d
+    Type:         SHT_GNU_verdef
+    Flags:        [ SHF_ALLOC ]
+    AddressAlign: 4
+    Link:         .dynstr
+    Info:         3
+    Entries:
+      - VersionNdx: 1
+        Flags:      1
+        Names:      [ libbad.so ]
+      - VersionNdx: 2
+        Names:      [ V1 ]
+      - VersionNdx: 3
+        Names:      [ V2 ]
+  - Name:  .text
+    Type:  SHT_PROGBITS
+    Flags: [ SHF_ALLOC, SHF_EXECINSTR ]
+  - Name:  .dynamic
+    Type:  SHT_DYNAMIC
+    Flags: [ SHF_ALLOC ]
+    Link:  .dynstr
+    Entries:
+      - Tag:   DT_STRTAB
+        Value: 0
+      - Tag:   DT_STRSZ
+        Value: 0x100
+      - Tag:   DT_SYMTAB
+        Value: 0
+      - Tag:   DT_SONAME
+        Value: 1
+      - Tag:   DT_NULL
+        Value: 0
+DynamicSymbols:
+  - Name:    'foo (1)'
+    Type:    STT_FUNC
+    Section: .text
+    Binding: STB_GLOBAL
+  - Name:    'foo (2)'
+    Type:    STT_FUNC
+    Section: .text
+    Binding: STB_GLOBAL
+ProgramHeaders:
+  - Type:     PT_LOAD
+    Flags:    [ PF_R, PF_X ]
+    FirstSec: .dynstr
+    LastSec:  .dynamic
+  - Type:     PT_DYNAMIC
+    Flags:    [ PF_R ]
+    FirstSec: .dynamic
+    LastSec:  .dynamic
+
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  Type:    ET_DYN
+  Machine: EM_X86_64
+Sections:
+  - Name:  .dynstr
+    Type:  SHT_STRTAB
+    Flags: [ SHF_ALLOC ]
+  - Name:  .dynsym
+    Type:  SHT_DYNSYM
+    Flags: [ SHF_ALLOC ]
+    Link:  .dynstr
+  - Name:    .gnu.version
+    Type:    SHT_GNU_versym
+    Flags:   [ SHF_ALLOC ]
+    Link:    .dynsym
+    Entries: [ 0, 0x8002, 0x8003, 4, 1, 0x8003, 5, 6 ]
+  - Name:         .gnu.version_d
+    Type:         SHT_GNU_verdef
+    Flags:        [ SHF_ALLOC ]
+    AddressAlign: 4
+    Link:         .dynstr
+    Info:         4
+    Entries:
+      - VersionNdx: 1
+        Flags:      1
+        Names:      [ libvalid.so ]
+      - VersionNdx: 2
+        Names:      [ V0 ]
+      - VersionNdx: 3
+        Names:      [ V1 ]
+      - VersionNdx: 4
+        Names:      [ V2 ]
+  - Name:         .gnu.version_r
+    Type:         SHT_GNU_verneed
+    Flags:        [ SHF_ALLOC ]
+    AddressAlign: 4
+    Link:         .dynstr
+    Info:         1
+    Dependencies:
+      - Version: 1
+        File:    libdep.so
+        Entries:
+          - Name:  V1
+            Hash:  0
+            Flags: 0
+            Other: 5
+          - Name:  V2
+            Hash:  0
+            Flags: 0
+            Other: 6
+  - Name:  .text
+    Type:  SHT_PROGBITS
+    Flags: [ SHF_ALLOC, SHF_EXECINSTR ]
+  - Name:  .dynamic
+    Type:  SHT_DYNAMIC
+    Flags: [ SHF_ALLOC ]
+    Link:  .dynstr
+    Entries:
+      - Tag:   DT_STRTAB
+        Value: 0
+      - Tag:   DT_STRSZ
+        Value: 0x200
+      - Tag:   DT_SYMTAB
+        Value: 0
+      - Tag:   DT_SONAME
+        Value: 1
+      - Tag:   DT_NULL
+        Value: 0
+DynamicSymbols:
+  - Name:    'foo (1)'
+    Type:    STT_FUNC
+    Section: .text
+    Binding: STB_GLOBAL
+  - Name:    'foo (2)'
+    Type:    STT_FUNC
+    Section: .text
+    Binding: STB_GLOBAL
+  - Name:    'foo (3)'
+    Type:    STT_FUNC
+    Section: .text
+    Binding: STB_GLOBAL
+  - Name:    'bar (1)'
+    Type:    STT_FUNC
+    Section: .text
+    Binding: STB_GLOBAL
+  - Name:    'bar (2)'
+    Type:    STT_FUNC
+    Section: .text
+    Binding: STB_GLOBAL
+  - Name:    'ext (1)'
+    Type:    STT_FUNC
+    Binding: STB_GLOBAL
+  - Name:    'ext (2)'
+    Type:    STT_FUNC
+    Binding: STB_GLOBAL
+ProgramHeaders:
+  - Type:     PT_LOAD
+    Flags:    [ PF_R, PF_X ]
+    FirstSec: .dynstr
+    LastSec:  .dynamic
+  - Type:     PT_DYNAMIC
+    Flags:    [ PF_R ]
+    FirstSec: .dynamic
+    LastSec:  .dynamic

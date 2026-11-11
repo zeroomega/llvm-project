@@ -8,6 +8,7 @@
 
 #include "llvm/InterfaceStub/IFSHandler.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/BinaryFormat/ELF.h"
@@ -203,6 +204,7 @@ Expected<std::unique_ptr<IFSStub>> ifs::readIFSFromBuffer(StringRef Buf) {
           "IFS arch '" + *Stub->Target.ArchString + "' is unsupported");
     Stub->Target.Arch = eMachine;
   }
+  StringMap<StringRef> DefaultVersionByName;
   for (const auto &Item : Stub->Symbols) {
     if (Item.Type == IFSSymbolType::Unknown)
       return createStringError(
@@ -213,6 +215,14 @@ Expected<std::unique_ptr<IFSStub>> ifs::readIFSFromBuffer(StringRef Buf) {
           std::make_error_code(std::errc::invalid_argument),
           "IFS symbol '" + Item.Name +
               "' cannot be marked Default without a defined Version");
+    if (!Item.Undefined && (Item.Default || Item.Version.empty())) {
+      auto [DI, Inserted] =
+          DefaultVersionByName.try_emplace(Item.Name, Item.Version);
+      if (!Inserted && DI->second != Item.Version)
+        return createStringError(
+            std::make_error_code(std::errc::invalid_argument),
+            "IFS symbol '" + Item.Name + "' has multiple default definitions");
+    }
   }
   return std::move(Stub);
 }
