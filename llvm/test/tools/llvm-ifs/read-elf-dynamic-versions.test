@@ -1,0 +1,216 @@
+## Test reading ELF symbol version definitions (DT_VERDEF/DT_VERDEFNUM) and
+## version dependencies (DT_VERNEED/DT_VERNEEDNUM) via .dynamic tags when
+## section headers are stripped (NoHeaders: true), including when a versioned
+## section sits at the exact end of a PT_LOAD segment.
+
+## 1. Compare IFS extracted with section headers vs stripped section headers.
+# RUN: yaml2obj --docnum=1 %s -DNOHEADERS=false -o %t.with_shdrs.so
+# RUN: yaml2obj --docnum=1 %s -DNOHEADERS=true -o %t.no_shdrs.so
+# RUN: llvm-ifs --input-format=ELF --output-ifs=%t.with_shdrs.ifs %t.with_shdrs.so
+# RUN: llvm-ifs --input-format=ELF --output-ifs=%t.no_shdrs.ifs %t.no_shdrs.so
+# RUN: FileCheck %s --check-prefix=CHECK-IFS < %t.no_shdrs.ifs
+# RUN: diff -u %t.with_shdrs.ifs %t.no_shdrs.ifs
+
+## 2. Reject incomplete DT_VERDEF (missing DT_VERDEFNUM) when sectionless.
+# RUN: yaml2obj --docnum=2 %s -o %t.missing_num.so
+# RUN: not llvm-ifs --input-format=ELF --output-ifs=- %t.missing_num.so 2>&1 | FileCheck %s --check-prefix=MISSING-NUM
+
+# CHECK-IFS:      --- !ifs-v1
+# CHECK-IFS-NEXT: IfsVersion:      3.0
+# CHECK-IFS-NEXT: SoName:          libdynver.so
+# CHECK-IFS-NEXT: Target:          { ObjectFormat: ELF, Arch: x86_64, Endianness: little, BitWidth: 64 }
+# CHECK-IFS-NEXT: Symbols:
+# CHECK-IFS-NEXT:   - { Name: compat_fn, Version: VER_1, Type: Func }
+# CHECK-IFS-NEXT:   - { Name: default_fn, Version: VER_2, Type: Func, Default: true }
+# CHECK-IFS-NEXT:   - { Name: ext_fn, Version: DEP_1, Type: Func, Undefined: true }
+# CHECK-IFS-NEXT:   - { Name: global_fn, Type: Func }
+# CHECK-IFS-NOT:    local_fn
+# CHECK-IFS-NEXT: ...
+
+# MISSING-NUM: error: DT_VERDEF and DT_VERDEFNUM must both be present
+
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  Type:    ET_DYN
+  Machine: EM_X86_64
+Sections:
+  - Name:         .dynsym
+    Type:         SHT_DYNSYM
+    Flags:        [ SHF_ALLOC ]
+    Address:      0x1000
+    AddressAlign: 0x1000
+  - Name:         .dynstr
+    Type:         SHT_STRTAB
+    Flags:        [ SHF_ALLOC ]
+    Address:      0x1100
+    AddressAlign: 0x100
+  - Name:         .hash
+    Type:         SHT_HASH
+    Flags:        [ SHF_ALLOC ]
+    Address:      0x1200
+    AddressAlign: 0x100
+    Bucket:       [ 1 ]
+    Chain:        [ 0, 2, 3, 4, 5, 0 ]
+  - Name:         .gnu.version_d
+    Type:         SHT_GNU_verdef
+    Flags:        [ SHF_ALLOC ]
+    Address:      0x1300
+    AddressAlign: 0x100
+    Info:         3
+    Entries:
+      - VersionNdx: 1
+        Flags:      1
+        Names:      [ libdynver.so ]
+      - VersionNdx: 2
+        Names:      [ VER_1 ]
+      - VersionNdx: 3
+        Names:      [ VER_2 ]
+  - Name:         .gnu.version_r
+    Type:         SHT_GNU_verneed
+    Flags:        [ SHF_ALLOC ]
+    Address:      0x1400
+    AddressAlign: 0x100
+    Info:         1
+    Dependencies:
+      - Version: 1
+        File:    libdep.so
+        Entries:
+          - Name:  DEP_1
+            Hash:  0
+            Flags: 0
+            Other: 4
+  - Name:         .dynamic
+    Type:         SHT_DYNAMIC
+    Flags:        [ SHF_ALLOC ]
+    Address:      0x1500
+    AddressAlign: 0x100
+    Entries:
+      - Tag:   DT_SYMTAB
+        Value: 0x1000
+      - Tag:   DT_STRTAB
+        Value: 0x1100
+      - Tag:   DT_STRSZ
+        Value: 0x59
+      - Tag:   DT_SONAME
+        Value: 1
+      - Tag:   DT_HASH
+        Value: 0x1200
+      - Tag:   DT_VERDEF
+        Value: 0x1300
+      - Tag:   DT_VERDEFNUM
+        Value: 3
+      - Tag:   DT_VERNEED
+        Value: 0x1400
+      - Tag:   DT_VERNEEDNUM
+        Value: 1
+      - Tag:   DT_VERSYM
+        Value: 0x1600
+      - Tag:   DT_NULL
+        Value: 0
+  ## Placed last in PT_LOAD so DT_VERSYM + Size lands right at p_vaddr+p_filesz.
+  - Name:         .gnu.version
+    Type:         SHT_GNU_versym
+    Flags:        [ SHF_ALLOC ]
+    Address:      0x1600
+    AddressAlign: 0x100
+    Entries:      [ 0, 4, 0x8002, 3, 1, 0 ]
+  - Type:      SectionHeaderTable
+    NoHeaders: [[NOHEADERS]]
+DynamicSymbols:
+  - Name:    ext_fn
+    Type:    STT_FUNC
+    Binding: STB_GLOBAL
+  - Name:    compat_fn
+    Type:    STT_FUNC
+    Index:   SHN_ABS
+    Value:   0x2000
+    Binding: STB_GLOBAL
+  - Name:    default_fn
+    Type:    STT_FUNC
+    Index:   SHN_ABS
+    Value:   0x2010
+    Binding: STB_GLOBAL
+  - Name:    global_fn
+    Type:    STT_FUNC
+    Index:   SHN_ABS
+    Value:   0x2020
+    Binding: STB_GLOBAL
+  - Name:    local_fn
+    Type:    STT_FUNC
+    Index:   SHN_ABS
+    Value:   0x2030
+    Binding: STB_GLOBAL
+ProgramHeaders:
+  - Type:     PT_LOAD
+    Flags:    [ PF_R ]
+    VAddr:    0x1000
+    FirstSec: .dynsym
+    LastSec:  .gnu.version
+  - Type:     PT_DYNAMIC
+    Flags:    [ PF_R ]
+    VAddr:    0x1500
+    FirstSec: .dynamic
+    LastSec:  .dynamic
+
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  Type:    ET_DYN
+  Machine: EM_X86_64
+Sections:
+  - Name:         .dynsym
+    Type:         SHT_DYNSYM
+    Flags:        [ SHF_ALLOC ]
+    Address:      0x1000
+    AddressAlign: 0x1000
+  - Name:         .dynstr
+    Type:         SHT_STRTAB
+    Flags:        [ SHF_ALLOC ]
+    Address:      0x1100
+    AddressAlign: 0x100
+  - Name:         .hash
+    Type:         SHT_HASH
+    Flags:        [ SHF_ALLOC ]
+    Address:      0x1200
+    AddressAlign: 0x100
+    Bucket:       [ 1 ]
+    Chain:        [ 0, 0 ]
+  - Name:         .dynamic
+    Type:         SHT_DYNAMIC
+    Flags:        [ SHF_ALLOC ]
+    Address:      0x1300
+    AddressAlign: 0x100
+    Entries:
+      - Tag:   DT_SYMTAB
+        Value: 0x1000
+      - Tag:   DT_STRTAB
+        Value: 0x1100
+      - Tag:   DT_STRSZ
+        Value: 0x4
+      - Tag:   DT_HASH
+        Value: 0x1200
+      - Tag:   DT_VERDEF
+        Value: 0x1000
+      - Tag:   DT_NULL
+        Value: 0
+  - Type:      SectionHeaderTable
+    NoHeaders: true
+DynamicSymbols:
+  - Name:    fn
+    Type:    STT_FUNC
+    Index:   SHN_ABS
+    Binding: STB_GLOBAL
+ProgramHeaders:
+  - Type:     PT_LOAD
+    Flags:    [ PF_R ]
+    VAddr:    0x1000
+    FirstSec: .dynsym
+    LastSec:  .dynamic
+  - Type:     PT_DYNAMIC
+    Flags:    [ PF_R ]
+    VAddr:    0x1300
+    FirstSec: .dynamic
+    LastSec:  .dynamic

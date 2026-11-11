@@ -726,6 +726,40 @@ public:
                      DynEnt.StrSize);
   }
 
+  Expected<const uint8_t *> getDynamicData(uint64_t EntAddr, StringRef Name,
+                                           uint64_t Size = 0) {
+    Expected<const uint8_t *> SecPtr = ElfFile.toMappedAddr(EntAddr);
+    if (!SecPtr)
+      return appendToError(
+          SecPtr.takeError(),
+          ("when locating " + Name + " section contents").str());
+    if (Size == 0)
+      return *SecPtr;
+    if (EntAddr > UINT64_MAX - (Size - 1))
+      return createError("size overflow when locating " + Name +
+                         " section contents");
+    Expected<const uint8_t *> SecLastPtr =
+        ElfFile.toMappedAddr(EntAddr + Size - 1);
+    if (!SecLastPtr) {
+      if (EntAddr <= UINT64_MAX - Size) {
+        Expected<const uint8_t *> EndPtr = ElfFile.toMappedAddr(EntAddr + Size);
+        if (!EndPtr) {
+          consumeError(SecLastPtr.takeError());
+          return appendToError(
+              EndPtr.takeError(),
+              ("when locating " + Name + " section contents").str());
+        }
+      }
+      return appendToError(
+          SecLastPtr.takeError(),
+          ("when locating " + Name + " section contents").str());
+    }
+    if (*SecLastPtr != *SecPtr + (Size - 1))
+      return createError(Name +
+                         " section contents span discontiguous segments");
+    return *SecPtr;
+  }
+
 private:
   DynSym(const ELFFile<ELFT> &ElfFile, const DynamicEntries &DynEnt,
          Elf_Shdr_Range Shdrs)
@@ -740,21 +774,6 @@ private:
         return &Sec;
       }
     return nullptr;
-  }
-
-  Expected<const uint8_t *> getDynamicData(uint64_t EntAddr, StringRef Name,
-                                           uint64_t Size = 0) {
-    Expected<const uint8_t *> SecPtr = ElfFile.toMappedAddr(EntAddr);
-    if (!SecPtr)
-      return appendToError(
-          SecPtr.takeError(),
-          ("when locating " + Name + " section contents").str());
-    Expected<const uint8_t *> SecEndPtr = ElfFile.toMappedAddr(EntAddr + Size);
-    if (!SecEndPtr)
-      return appendToError(
-          SecEndPtr.takeError(),
-          ("when locating " + Name + " section contents").str());
-    return *SecPtr;
   }
 
   const ELFFile<ELFT> &ElfFile;
@@ -900,6 +919,154 @@ static IFSSymbol createELFSym(StringRef SymName, StringRef SymVer, bool Default,
   return TargetSym;
 }
 
+template <class ELFT>
+static Error parseDynamicVerDefs(const ELFFile<ELFT> &ElfFile,
+                                 uint64_t VerDefAddr, uint64_t VerDefNum,
+                                 StringRef DynStr,
+                                 std::vector<std::string> &VerDefs) {
+  using Elf_Verdef = typename ELFT::Verdef;
+  using Elf_Verdaux = typename ELFT::Verdaux;
+  if (VerDefNum == 0)
+    return Error::success();
+  Expected<const uint8_t *> StartOrErr = ElfFile.toMappedAddr(VerDefAddr);
+  if (!StartOrErr)
+    return appendToError(StartOrErr.takeError(),
+                         "when reading dynamic symbol version definitions");
+  const uint8_t *Start = *StartOrErr;
+  const uint8_t *BufEnd = ElfFile.base() + ElfFile.getBufSize();
+  const size_t Avail = static_cast<size_t>(BufEnd - Start);
+  size_t Offset = 0;
+  for (uint64_t I = 1; I <= VerDefNum; ++I) {
+    if (Avail - Offset < sizeof(Elf_Verdef))
+      return createError("dynamic version definition " + Twine(I) +
+                         " goes past the end of the buffer");
+    if (((VerDefAddr + Offset) % sizeof(uint32_t)) != 0)
+      return createError("found a misaligned dynamic version definition entry "
+                         "at offset 0x" +
+                         Twine::utohexstr(Offset));
+    const auto *D = reinterpret_cast<const Elf_Verdef *>(Start + Offset);
+    if (D->vd_version != VER_DEF_CURRENT)
+      return createError("unsupported dynamic version definition version " +
+                         Twine(D->vd_version));
+    if (D->vd_cnt > 0) {
+      if (D->vd_aux > Avail - Offset)
+        return createError("dynamic version definition " + Twine(I) +
+                           " auxiliary entry goes past the end of the buffer");
+      size_t AuxOffset = Offset + D->vd_aux;
+      for (unsigned J = 0; J < D->vd_cnt; ++J) {
+        if (Avail - AuxOffset < sizeof(Elf_Verdaux))
+          return createError(
+              "dynamic version definition " + Twine(I) +
+              " auxiliary entry goes past the end of the buffer");
+        if (((VerDefAddr + AuxOffset) % sizeof(uint32_t)) != 0)
+          return createError(
+              "found a misaligned dynamic version definition auxiliary entry "
+              "at offset 0x" +
+              Twine::utohexstr(AuxOffset));
+        const auto *Aux =
+            reinterpret_cast<const Elf_Verdaux *>(Start + AuxOffset);
+        Expected<StringRef> NameOrErr = terminatedSubstr(DynStr, Aux->vda_name);
+        if (!NameOrErr)
+          return appendToError(
+              NameOrErr.takeError(),
+              "when reading dynamic symbol version definitions");
+        if (J == 0) {
+          size_t N = D->vd_ndx & VERSYM_VERSION;
+          if (N >= VerDefs.size())
+            VerDefs.resize(N + 1);
+          VerDefs[N] = std::string(*NameOrErr);
+        }
+        if (J + 1 < D->vd_cnt) {
+          if (Aux->vda_next == 0 || Aux->vda_next > Avail - AuxOffset)
+            return createError(
+                "invalid vda_next in dynamic version definition " + Twine(I));
+          AuxOffset += Aux->vda_next;
+        }
+      }
+    }
+    if (I < VerDefNum) {
+      if (D->vd_next == 0 || D->vd_next > Avail - Offset)
+        return createError("invalid vd_next in dynamic version definition " +
+                           Twine(I));
+      Offset += D->vd_next;
+    }
+  }
+  return Error::success();
+}
+
+template <class ELFT>
+static Error parseDynamicVerNeeds(const ELFFile<ELFT> &ElfFile,
+                                  uint64_t VerNeedAddr, uint64_t VerNeedNum,
+                                  StringRef DynStr,
+                                  std::vector<std::string> &VerNeeds) {
+  using Elf_Verneed = typename ELFT::Verneed;
+  using Elf_Vernaux = typename ELFT::Vernaux;
+  if (VerNeedNum == 0)
+    return Error::success();
+  Expected<const uint8_t *> StartOrErr = ElfFile.toMappedAddr(VerNeedAddr);
+  if (!StartOrErr)
+    return appendToError(StartOrErr.takeError(),
+                         "when reading dynamic symbol version dependencies");
+  const uint8_t *Start = *StartOrErr;
+  const uint8_t *BufEnd = ElfFile.base() + ElfFile.getBufSize();
+  const size_t Avail = static_cast<size_t>(BufEnd - Start);
+  size_t Offset = 0;
+  for (uint64_t I = 1; I <= VerNeedNum; ++I) {
+    if (Avail - Offset < sizeof(Elf_Verneed))
+      return createError("dynamic version dependency " + Twine(I) +
+                         " goes past the end of the buffer");
+    if (((VerNeedAddr + Offset) % sizeof(uint32_t)) != 0)
+      return createError("found a misaligned dynamic version dependency entry "
+                         "at offset 0x" +
+                         Twine::utohexstr(Offset));
+    const auto *VN = reinterpret_cast<const Elf_Verneed *>(Start + Offset);
+    if (VN->vn_version != VER_NEED_CURRENT)
+      return createError("unsupported dynamic version dependency version " +
+                         Twine(VN->vn_version));
+    if (VN->vn_cnt > 0) {
+      if (VN->vn_aux > Avail - Offset)
+        return createError("dynamic version dependency " + Twine(I) +
+                           " auxiliary entry goes past the end of the buffer");
+      size_t AuxOffset = Offset + VN->vn_aux;
+      for (unsigned J = 0; J < VN->vn_cnt; ++J) {
+        if (Avail - AuxOffset < sizeof(Elf_Vernaux))
+          return createError(
+              "dynamic version dependency " + Twine(I) +
+              " auxiliary entry goes past the end of the buffer");
+        if (((VerNeedAddr + AuxOffset) % sizeof(uint32_t)) != 0)
+          return createError(
+              "found a misaligned dynamic version dependency auxiliary entry "
+              "at offset 0x" +
+              Twine::utohexstr(AuxOffset));
+        const auto *Aux =
+            reinterpret_cast<const Elf_Vernaux *>(Start + AuxOffset);
+        Expected<StringRef> NameOrErr = terminatedSubstr(DynStr, Aux->vna_name);
+        if (!NameOrErr)
+          return appendToError(
+              NameOrErr.takeError(),
+              "when reading dynamic symbol version dependencies");
+        size_t N = Aux->vna_other & VERSYM_VERSION;
+        if (N >= VerNeeds.size())
+          VerNeeds.resize(N + 1);
+        VerNeeds[N] = std::string(*NameOrErr);
+        if (J + 1 < VN->vn_cnt) {
+          if (Aux->vna_next == 0 || Aux->vna_next > Avail - AuxOffset)
+            return createError(
+                "invalid vna_next in dynamic version dependency " + Twine(I));
+          AuxOffset += Aux->vna_next;
+        }
+      }
+    }
+    if (I < VerNeedNum) {
+      if (VN->vn_next == 0 || VN->vn_next > Avail - Offset)
+        return createError("invalid vn_next in dynamic version dependency " +
+                           Twine(I));
+      Offset += VN->vn_next;
+    }
+  }
+  return Error::success();
+}
+
 /// Returns a new IFSStub with all members populated from an ELFObjectFile.
 /// @param ElfObj Source ELFObjectFile.
 template <class ELFT>
@@ -959,6 +1126,13 @@ buildStub(const ELFObjectFile<ELFT> &ElfObj) {
     DestStub->NeededLibs.push_back(std::string(*LibNameOrErr));
   }
 
+  // Populate Symbols from .dynsym table and dynamic string table.
+  Expected<uint64_t> SymCount = ElfFile.getDynSymtabSize();
+  if (!SymCount)
+    return SymCount.takeError();
+  if (*SymCount == 0)
+    return std::move(DestStub);
+
   // [VER_NDX_LOCAL, VER_NDX_GLOBAL]
   std::vector<std::string> VerDefs{{}, {}};
   std::vector<std::string> VerNeeds{{}, {}};
@@ -975,6 +1149,12 @@ buildStub(const ELFObjectFile<ELFT> &ElfObj) {
         VerDefs.resize(N + 1);
       VerDefs[N] = VD.Name.c_str();
     }
+  } else if (DynEnt.VerDef || DynEnt.VerDefNum) {
+    if (!DynEnt.VerDef || !DynEnt.VerDefNum)
+      return createError("DT_VERDEF and DT_VERDEFNUM must both be present");
+    if (Error Err = parseDynamicVerDefs(ElfFile, *DynEnt.VerDef,
+                                        *DynEnt.VerDefNum, DynStr, VerDefs))
+      return std::move(Err);
   }
 
   if (const Elf_Shdr *VerNeedPtr = EDynSym->getVerNeed()) {
@@ -991,14 +1171,13 @@ buildStub(const ELFObjectFile<ELFT> &ElfObj) {
         VerNeeds[N] = Aux.Name.c_str();
       }
     }
+  } else if (DynEnt.VerNeed || DynEnt.VerNeedNum) {
+    if (!DynEnt.VerNeed || !DynEnt.VerNeedNum)
+      return createError("DT_VERNEED and DT_VERNEEDNUM must both be present");
+    if (Error Err = parseDynamicVerNeeds(ElfFile, *DynEnt.VerNeed,
+                                         *DynEnt.VerNeedNum, DynStr, VerNeeds))
+      return std::move(Err);
   }
-
-  // Populate Symbols from .dynsym table and dynamic string table.
-  Expected<uint64_t> SymCount = ElfFile.getDynSymtabSize();
-  if (!SymCount)
-    return SymCount.takeError();
-  if (*SymCount == 0)
-    return std::move(DestStub);
 
   // Get pointer to in-memory location of .dynsym section.
   Expected<const uint8_t *> DynSymPtr = EDynSym->getDynSym();
@@ -1008,7 +1187,24 @@ buildStub(const ELFObjectFile<ELFT> &ElfObj) {
   Elf_Sym_Range DynSyms = ArrayRef<Elf_Sym>(
       reinterpret_cast<const Elf_Sym *>(*DynSymPtr), *SymCount);
 
+  using Elf_VerSym = typename ELFT::Versym;
   const Elf_Shdr *VerSymPtr = EDynSym->getVerSym();
+  ArrayRef<Elf_VerSym> DynVerSyms;
+  if (!VerSymPtr && DynEnt.VerSym) {
+    if (*SymCount > UINT64_MAX / sizeof(Elf_VerSym))
+      return createError("symbol count overflow when reading DT_VERSYM");
+    if ((*DynEnt.VerSym % sizeof(uint16_t)) != 0)
+      return createError("misaligned DT_VERSYM address: 0x" +
+                         Twine::utohexstr(*DynEnt.VerSym));
+    Expected<const uint8_t *> VerSymData =
+        EDynSym->getDynamicData(*DynEnt.VerSym, "dynamic version symbol table",
+                                *SymCount * sizeof(Elf_VerSym));
+    if (!VerSymData)
+      return VerSymData.takeError();
+    DynVerSyms = ArrayRef<Elf_VerSym>(
+        reinterpret_cast<const Elf_VerSym *>(*VerSymData), *SymCount);
+  }
+
   size_t SymbolIndex = 0;
   // Skips the first symbol since it's the NULL symbol.
   for (const Elf_Sym &DynSym : DynSyms.drop_front(1)) {
@@ -1028,14 +1224,18 @@ buildStub(const ELFObjectFile<ELFT> &ElfObj) {
 
     bool Default = false;
     std::string Version;
-    if (VerSymPtr) {
-      using Elf_VerSym = typename ELFT::Versym;
-      Expected<const Elf_VerSym *> VerEntryOrErr =
-          ElfFile.template getEntry<Elf_VerSym>(*VerSymPtr, SymbolIndex);
-      if (!VerEntryOrErr)
-        return appendToError(VerEntryOrErr.takeError(),
-                             "when reading symbol versions");
-      uint16_t VSIndex = (*VerEntryOrErr)->vs_index;
+    if (VerSymPtr || !DynVerSyms.empty()) {
+      uint16_t VSIndex = 0;
+      if (VerSymPtr) {
+        Expected<const Elf_VerSym *> VerEntryOrErr =
+            ElfFile.template getEntry<Elf_VerSym>(*VerSymPtr, SymbolIndex);
+        if (!VerEntryOrErr)
+          return appendToError(VerEntryOrErr.takeError(),
+                               "when reading symbol versions");
+        VSIndex = (*VerEntryOrErr)->vs_index;
+      } else {
+        VSIndex = DynVerSyms[SymbolIndex].vs_index;
+      }
       size_t VersionIndex = VSIndex & VERSYM_VERSION;
       if (DynSym.isUndefined()) {
         if (VersionIndex > VER_NDX_GLOBAL) {
