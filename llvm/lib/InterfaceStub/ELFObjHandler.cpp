@@ -112,9 +112,10 @@ public:
   ELFSymbolTableBuilder() { Symbols.push_back({}); }
 
   void add(size_t StNameOffset, uint64_t StSize, uint8_t StBind, uint8_t StType,
-           uint8_t StOther, uint16_t StShndx) {
+           uint8_t StOther, uint16_t StShndx, uint64_t StValue = 0) {
     Elf_Sym S{};
     S.st_name = StNameOffset;
+    S.st_value = StValue;
     S.st_size = StSize;
     S.st_info = (StBind << 4) | (StType & 0xf);
     S.st_other = StOther;
@@ -322,6 +323,8 @@ public:
     DynStr.Align = 1;
     DynTab.Name = ".dynamic";
     DynTab.Align = sizeof(Elf_Addr);
+    StubSec.Name = ".stub";
+    StubSec.Align = 64;
     ShStrTab.Name = ".shstrtab";
     ShStrTab.Align = 1;
     VerSym.Name = ".gnu.version";
@@ -362,7 +365,7 @@ public:
     if (Stub.SoName)
       DynStr.Content.add(*Stub.SoName);
 
-    SmallVector<OutputSection<ELFT> *, 7> Sections;
+    SmallVector<OutputSection<ELFT> *, 8> Sections;
     Sections.push_back(&DynSym);
     Sections.push_back(&DynStr);
     if (HasVersion)
@@ -372,6 +375,7 @@ public:
     if (HasVerNeed)
       Sections.push_back(&VerNeed);
     Sections.push_back(&DynTab);
+    Sections.push_back(&StubSec);
     Sections.push_back(&ShStrTab);
     const OutputSection<ELFT> *LastSection = Sections.back();
     // Now set the Index and put sections names into ".shstrtab".
@@ -384,19 +388,18 @@ public:
     ShStrTab.Size = ShStrTab.Content.getSize();
     DynStr.Content.finalize();
     DynStr.Size = DynStr.Content.getSize();
+    DynSym.Size = (1 + Stub.Symbols.size()) * sizeof(Elf_Sym);
 
-    // Populate dynamic symbol table.
+    // Compute synthetic .stub section size so defined symbols receive distinct,
+    // aligned virtual addresses for copy-relocation alias/alignment handling.
+    uint64_t StubDataSize = 0;
     for (const IFSSymbol &Sym : Stub.Symbols) {
-      uint8_t Bind = Sym.Weak ? STB_WEAK : STB_GLOBAL;
-      // For non-undefined symbols, value of the shndx is not relevant at link
-      // time as long as it is not SHN_UNDEF. Set shndx to 1, which
-      // points to ".dynsym".
-      uint16_t Shndx = Sym.Undefined ? SHN_UNDEF : 1;
-      uint64_t Size = Sym.Size.value_or(0);
-      DynSym.Content.add(DynStr.Content.getOffset(Sym.Name), Size, Bind,
-                         convertIFSSymbolTypeToELF(Sym.Type), 0, Shndx);
+      if (Sym.Undefined)
+        continue;
+      StubDataSize = alignTo(StubDataSize, StubSec.Align);
+      StubDataSize += std::max<uint64_t>(Sym.Size.value_or(0), 1);
     }
-    DynSym.Size = DynSym.Content.getSize();
+    StubSec.Size = StubDataSize;
 
     StringMap<size_t> VerDefMap;
     size_t Vdndx = 2;
@@ -493,13 +496,36 @@ public:
       DynTab.Content.addValue(DT_VERNEEDNUM, 1);
     }
     DynTab.Size = DynTab.Content.getSize();
+
     // Calculate sections' addresses and offsets.
     uint64_t CurrentOffset = sizeof(Elf_Ehdr);
+    uint64_t CurrentAddr = sizeof(Elf_Ehdr);
     for (OutputSection<ELFT> *Sec : Sections) {
-      Sec->Offset = alignTo(CurrentOffset, Sec->Align);
-      Sec->Addr = Sec->Offset;
-      CurrentOffset = Sec->Offset + Sec->Size;
+      Sec->Offset =
+          Sec->NoBits ? CurrentOffset : alignTo(CurrentOffset, Sec->Align);
+      Sec->Addr = alignTo(CurrentAddr, Sec->Align);
+      if (!Sec->NoBits)
+        CurrentOffset = Sec->Offset + Sec->Size;
+      CurrentAddr = Sec->Addr + Sec->Size;
     }
+
+    // Populate dynamic symbol table with distinct non-zero virtual addresses.
+    uint64_t NextSymOffset = 0;
+    for (const IFSSymbol &Sym : Stub.Symbols) {
+      uint8_t Bind = Sym.Weak ? STB_WEAK : STB_GLOBAL;
+      uint16_t Shndx = Sym.Undefined ? uint16_t(SHN_UNDEF)
+                                     : static_cast<uint16_t>(StubSec.Index);
+      uint64_t Size = Sym.Size.value_or(0);
+      uint64_t Value = 0;
+      if (!Sym.Undefined) {
+        NextSymOffset = alignTo(NextSymOffset, StubSec.Align);
+        Value = StubSec.Addr + NextSymOffset;
+        NextSymOffset += std::max<uint64_t>(Size, 1);
+      }
+      DynSym.Content.add(DynStr.Content.getOffset(Sym.Name), Size, Bind,
+                         convertIFSSymbolTypeToELF(Sym.Type), 0, Shndx, Value);
+    }
+
     // Fill Addr back to dynamic table.
     DynTab.Content.modifyAddr(DynSymIndex, DynSym.Addr);
     DynTab.Content.modifyAddr(DynStrIndex, DynStr.Addr);
@@ -509,10 +535,11 @@ public:
       DynTab.Content.modifyAddr(VerDefIndex, VerDef.Addr);
     if (HasVerNeed)
       DynTab.Content.modifyAddr(VerNeedIndex, VerNeed.Addr);
-    // Write section headers of string tables.
+    // Write section headers.
     fillSymTabShdr(DynSym, SHT_DYNSYM);
     fillStrTabShdr(DynStr, SHF_ALLOC);
     fillDynTabShdr(DynTab);
+    fillStubShdr(StubSec);
     fillStrTabShdr(ShStrTab);
     if (HasVersion)
       fillVerSymShdr(VerSym);
@@ -550,6 +577,7 @@ public:
     writeShdr(Data, DynSym);
     writeShdr(Data, DynStr);
     writeShdr(Data, DynTab);
+    writeShdr(Data, StubSec);
     writeShdr(Data, ShStrTab);
     if (HasVersion)
       writeShdr(Data, VerSym);
@@ -568,6 +596,7 @@ private:
   ContentSection<ELFVersionSymbolBuilder<ELFT>, ELFT> VerSym;
   ContentSection<ELFVersionDefinitionBuilder<ELFT>, ELFT> VerDef;
   ContentSection<ELFVersionNeedBuilder<ELFT>, ELFT> VerNeed;
+  OutputSection<ELFT> StubSec;
   bool HasVersion = false;
   bool HasVerDef = false;
   bool HasVerNeed = false;
@@ -580,7 +609,7 @@ private:
                       uint32_t ShFlags = 0) const {
     StrTab.Shdr.sh_type = SHT_STRTAB;
     StrTab.Shdr.sh_flags = ShFlags;
-    StrTab.Shdr.sh_addr = StrTab.Addr;
+    StrTab.Shdr.sh_addr = (ShFlags & SHF_ALLOC) ? StrTab.Addr : 0;
     StrTab.Shdr.sh_offset = StrTab.Offset;
     StrTab.Shdr.sh_info = 0;
     StrTab.Shdr.sh_size = StrTab.Size;
@@ -620,7 +649,6 @@ private:
     DynTab.Shdr.sh_entsize = sizeof(Elf_Dyn);
     DynTab.Shdr.sh_link = this->DynStr.Index;
   }
-
   void fillVerSymShdr(
       ContentSection<ELFVersionSymbolBuilder<ELFT>, ELFT> &VerSym) const {
     VerSym.Shdr.sh_type = SHT_GNU_versym;
@@ -665,6 +693,18 @@ private:
     VerNeed.Shdr.sh_link = this->DynStr.Index;
   }
 
+  void fillStubShdr(OutputSection<ELFT> &StubSec) const {
+    StubSec.Shdr.sh_type = SHT_NOBITS;
+    StubSec.Shdr.sh_flags = SHF_ALLOC | SHF_WRITE;
+    StubSec.Shdr.sh_addr = StubSec.Addr;
+    StubSec.Shdr.sh_offset = StubSec.Offset;
+    StubSec.Shdr.sh_info = 0;
+    StubSec.Shdr.sh_size = StubSec.Size;
+    StubSec.Shdr.sh_name = this->ShStrTab.Content.getOffset(StubSec.Name);
+    StubSec.Shdr.sh_addralign = StubSec.Align;
+    StubSec.Shdr.sh_entsize = 0;
+    StubSec.Shdr.sh_link = 0;
+  }
   uint64_t shdrOffset(const OutputSection<ELFT> &Sec) const {
     return ElfHeader.e_shoff + Sec.Index * sizeof(Elf_Shdr);
   }
@@ -902,8 +942,10 @@ static IFSSymbol createELFSym(StringRef SymName, StringRef SymVer, bool Default,
                               const typename ELFT::Sym &RawSym) {
   IFSSymbol TargetSym{SymName};
   uint8_t Binding = RawSym.getBinding();
-  // Treat STB_GNU_UNIQUE like STB_WEAK for interface stubs.
-  TargetSym.Weak = Binding == STB_WEAK || Binding == STB_GNU_UNIQUE;
+  // Treat defined STB_GNU_UNIQUE symbols like STB_WEAK for interface stubs,
+  // while keeping undefined STB_GNU_UNIQUE symbols strong.
+  TargetSym.Weak = Binding == STB_WEAK ||
+                   (Binding == STB_GNU_UNIQUE && !RawSym.isUndefined());
 
   TargetSym.Version = SymVer;
 

@@ -22,8 +22,8 @@
 # CHECK-ELF: ELF Header:
 # CHECK-ELF:   Class:                             ELF64
 # CHECK-ELF:   Type:                              DYN (Shared object file)
-# CHECK-ELF:   FUNC    GLOBAL DEFAULT  1 a
-# CHECK-ELF:   OBJECT  GLOBAL DEFAULT  1 b
+# CHECK-ELF:   FUNC    GLOBAL DEFAULT  4 a
+# CHECK-ELF:   OBJECT  GLOBAL DEFAULT  4 b
 
 # CHECK-DARWIN-TBD3: --- !tapi-tbd-v3
 # CHECK-DARWIN-TBD3-NEXT: archs:           [ x86_64 ]

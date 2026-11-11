@@ -48,7 +48,7 @@
 # ELF-NEXT:     Binding: Global
 # ELF-NEXT:     Type: Function
 # ELF-NEXT:     Other: 0
-# ELF-NEXT:     Section: .dynsym
+# ELF-NEXT:     Section: .stub
 # ELF-NEXT:   }
 # ELF-NEXT:   Symbol {
 # ELF-NEXT:     Name: ifunc_protected
@@ -57,7 +57,7 @@
 # ELF-NEXT:     Binding: Global
 # ELF-NEXT:     Type: Function
 # ELF-NEXT:     Other: 0
-# ELF-NEXT:     Section: .dynsym
+# ELF-NEXT:     Section: .stub
 # ELF-NEXT:   }
 # ELF-NEXT:   Symbol {
 # ELF-NEXT:     Name: ifunc_undef
@@ -75,7 +75,7 @@
 # ELF-NEXT:     Binding: Weak
 # ELF-NEXT:     Type: Function
 # ELF-NEXT:     Other: 0
-# ELF-NEXT:     Section: .dynsym
+# ELF-NEXT:     Section: .stub
 # ELF-NEXT:   }
 # ELF-NEXT:   Symbol {
 # ELF-NEXT:     Name: normal_func
@@ -84,7 +84,7 @@
 # ELF-NEXT:     Binding: Global
 # ELF-NEXT:     Type: Function
 # ELF-NEXT:     Other: 0
-# ELF-NEXT:     Section: .dynsym
+# ELF-NEXT:     Section: .stub
 # ELF-NEXT:   }
 # ELF-NEXT: ]
 
@@ -92,8 +92,8 @@
 # VER-IFS-NEXT:   - { Name: __gettimeofday, Version: GLIBC_2.0, Type: Func }
 # VER-IFS-NEXT:   - { Name: __gettimeofday, Version: GLIBC_2.2.5, Type: Func, Default: true }
 
-# VER-ELF:      FUNC    GLOBAL DEFAULT    1 __gettimeofday@GLIBC_2.0{{$}}
-# VER-ELF-NEXT: FUNC    GLOBAL DEFAULT    1 __gettimeofday@@GLIBC_2.2.5{{$}}
+# VER-ELF:      FUNC    GLOBAL DEFAULT    6 __gettimeofday@GLIBC_2.0{{$}}
+# VER-ELF-NEXT: FUNC    GLOBAL DEFAULT    6 __gettimeofday@@GLIBC_2.2.5{{$}}
 
 --- !ELF
 FileHeader:

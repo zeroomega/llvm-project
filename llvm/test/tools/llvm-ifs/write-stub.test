@@ -72,8 +72,8 @@ Symbols:
 # CHECK-NEXT:   HeaderSize: [[HS]]
 # CHECK-NEXT:   ProgramHeaderEntrySize: [[PHES]]
 # CHECK:        SectionHeaderEntrySize: [[SHES]]
-# CHECK:        SectionHeaderCount: 5
-# CHECK:        StringTableSectionIndex: 4
+# CHECK:        SectionHeaderCount: 6
+# CHECK:        StringTableSectionIndex: 5
 
 # CHECK:      Section {
 # CHECK-NEXT:   Index: 0
@@ -136,6 +136,22 @@ Symbols:
 # CHECK-NEXT: }
 # CHECK-NEXT: Section {
 # CHECK-NEXT:   Index: 4
+# CHECK-NEXT:   Name: .stub
+# CHECK-NEXT:   Type: SHT_NOBITS
+# CHECK-NEXT:   Flags [
+# CHECK-NEXT:     SHF_ALLOC
+# CHECK-NEXT:     SHF_WRITE
+# CHECK-NEXT:   ]
+# CHECK-NEXT:   Address:
+# CHECK-NEXT:   Offset:
+# CHECK-NEXT:   Size:
+# CHECK-NEXT:   Link: 0
+# CHECK-NEXT:   Info: 0
+# CHECK-NEXT:   AddressAlignment: 64
+# CHECK-NEXT:   EntrySize: 0
+# CHECK-NEXT: }
+# CHECK-NEXT: Section {
+# CHECK-NEXT:   Index: 5
 # CHECK-NEXT:   Name: .shstrtab
 # CHECK-NEXT:   Type: SHT_STRTAB
 # CHECK-NEXT:   Flags [
@@ -174,7 +190,7 @@ Symbols:
 # CHECK-NEXT:     Binding: Global
 # CHECK-NEXT:     Type: Object
 # CHECK-NEXT:     Other: 0
-# CHECK-NEXT:     Section: .dynsym
+# CHECK-NEXT:     Section: .stub
 # CHECK-NEXT:   }
 # CHECK-NEXT:   Symbol {
 # CHECK-NEXT:     Name: baz
@@ -183,7 +199,7 @@ Symbols:
 # CHECK-NEXT:     Binding: Global
 # CHECK-NEXT:     Type: TLS
 # CHECK-NEXT:     Other: 0
-# CHECK-NEXT:     Section: .dynsym
+# CHECK-NEXT:     Section: .stub
 # CHECK-NEXT:   }
 # CHECK-NEXT:   Symbol {
 # CHECK-NEXT:     Name: plus
@@ -192,7 +208,7 @@ Symbols:
 # CHECK-NEXT:     Binding: Global
 # CHECK-NEXT:     Type: Function
 # CHECK-NEXT:     Other: 0
-# CHECK-NEXT:     Section: .dynsym
+# CHECK-NEXT:     Section: .stub
 # CHECK-NEXT: }
 
 # CHECK:      String dump of section '.dynstr':
@@ -205,7 +221,8 @@ Symbols:
 # CHECK-NEXT: [     1] .dynstr
 # CHECK-NEXT: [     9] .dynsym
 # CHECK-NEXT: [    11] .dynamic
-# CHECK-NEXT: [    1a] .shstrtab
+# CHECK-NEXT: [    1a] .stub
+# CHECK-NEXT: [    20] .shstrtab
 
 # TRIPLEERR: error: Target triple cannot be used simultaneously with ELF target format
 # TARGETERR: error: [[MSG]] is not defined in the text stub

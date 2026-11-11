@@ -14,9 +14,9 @@
 # CHECK-IFS-NEXT:   - { Name: func, Version: VER, Type: Func }
 # CHECK-IFS-NEXT: ...
 
-# CHECK-ELF: OBJECT  GLOBAL DEFAULT  1 VER@@VER
-# CHECK-ELF: FUNC    GLOBAL DEFAULT  1 def@@VER
-# CHECK-ELF: FUNC    GLOBAL DEFAULT  1 func@VER
+# CHECK-ELF: OBJECT  GLOBAL DEFAULT  6 VER@@VER
+# CHECK-ELF: FUNC    GLOBAL DEFAULT  6 def@@VER
+# CHECK-ELF: FUNC    GLOBAL DEFAULT  6 func@VER
 
 # CHECK-ELF: Rev: 1  Flags: BASE  Index: 1  Cnt: 1  Name: libfoo.so
 # CHECK-ELF: Rev: 1  Flags: none  Index: 2  Cnt: 1  Name: VER

@@ -18,8 +18,8 @@
 # CHECK-ELF: ELF Header:
 # CHECK-ELF:   Class:                             ELF64
 # CHECK-ELF:   Type:                              DYN (Shared object file)
-# CHECK-ELF:   FUNC    GLOBAL DEFAULT  1 a
-# CHECK-ELF:   OBJECT  GLOBAL DEFAULT  1 b
+# CHECK-ELF:   FUNC    GLOBAL DEFAULT  4 a
+# CHECK-ELF:   OBJECT  GLOBAL DEFAULT  4 b
 
 # Here we are testing to see if two identical symbols will merge.
 # CHECK-MERGE-IFS: --- !ifs-v1

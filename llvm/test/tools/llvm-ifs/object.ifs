@@ -15,8 +15,8 @@
 # CHECK-ELF:   Class:                             ELF64
 # CHECK-ELF:   Data:                              2's complement, little endian
 # CHECK-ELF:   Type:                              DYN (Shared object file)
-# CHECK-ELF-NOT:   FUNC    GLOBAL DEFAULT  1 a
-# CHECK-ELF:   OBJECT  GLOBAL DEFAULT  1 b
+# CHECK-ELF-NOT:   FUNC    GLOBAL DEFAULT  4 a
+# CHECK-ELF:   OBJECT  GLOBAL DEFAULT  4 b
 
 --- !ifs-v1
 IfsVersion: 3.0

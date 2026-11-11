@@ -17,6 +17,7 @@
 # IFS-NEXT:   - { Name: unique_default, Type: Object, Size: 8, Weak: true }
 # IFS-NEXT:   - { Name: unique_protected, Type: Object, Size: 16, Weak: true }
 # IFS-NEXT:   - { Name: unique_tls, Type: TLS, Size: 4, Weak: true }
+# IFS-NEXT:   - { Name: unique_undef, Type: Object, Size: 0, Undefined: true }
 # IFS-NEXT:   - { Name: weak_obj, Type: Object, Size: 4, Weak: true }
 # IFS-NEXT: ...
 
@@ -32,48 +33,57 @@
 # ELF-NEXT:   }
 # ELF-NEXT:   Symbol {
 # ELF-NEXT:     Name: global_obj
-# ELF-NEXT:     Value: 0x0
+# ELF-NEXT:     Value: 0x180
 # ELF-NEXT:     Size: 4
 # ELF-NEXT:     Binding: Global
 # ELF-NEXT:     Type: Object
 # ELF-NEXT:     Other: 0
-# ELF-NEXT:     Section: .dynsym
+# ELF-NEXT:     Section: .stub
 # ELF-NEXT:   }
 # ELF-NEXT:   Symbol {
 # ELF-NEXT:     Name: unique_default
-# ELF-NEXT:     Value: 0x0
+# ELF-NEXT:     Value: 0x1C0
 # ELF-NEXT:     Size: 8
 # ELF-NEXT:     Binding: Weak
 # ELF-NEXT:     Type: Object
 # ELF-NEXT:     Other: 0
-# ELF-NEXT:     Section: .dynsym
+# ELF-NEXT:     Section: .stub
 # ELF-NEXT:   }
 # ELF-NEXT:   Symbol {
 # ELF-NEXT:     Name: unique_protected
-# ELF-NEXT:     Value: 0x0
+# ELF-NEXT:     Value: 0x200
 # ELF-NEXT:     Size: 16
 # ELF-NEXT:     Binding: Weak
 # ELF-NEXT:     Type: Object
 # ELF-NEXT:     Other: 0
-# ELF-NEXT:     Section: .dynsym
+# ELF-NEXT:     Section: .stub
 # ELF-NEXT:   }
 # ELF-NEXT:   Symbol {
 # ELF-NEXT:     Name: unique_tls
-# ELF-NEXT:     Value: 0x0
+# ELF-NEXT:     Value: 0x240
 # ELF-NEXT:     Size: 4
 # ELF-NEXT:     Binding: Weak
 # ELF-NEXT:     Type: TLS
 # ELF-NEXT:     Other: 0
-# ELF-NEXT:     Section: .dynsym
+# ELF-NEXT:     Section: .stub
+# ELF-NEXT:   }
+# ELF-NEXT:   Symbol {
+# ELF-NEXT:     Name: unique_undef
+# ELF-NEXT:     Value: 0x0
+# ELF-NEXT:     Size: 0
+# ELF-NEXT:     Binding: Global
+# ELF-NEXT:     Type: Object
+# ELF-NEXT:     Other: 0
+# ELF-NEXT:     Section: Undefined
 # ELF-NEXT:   }
 # ELF-NEXT:   Symbol {
 # ELF-NEXT:     Name: weak_obj
-# ELF-NEXT:     Value: 0x0
+# ELF-NEXT:     Value: 0x280
 # ELF-NEXT:     Size: 4
 # ELF-NEXT:     Binding: Weak
 # ELF-NEXT:     Type: Object
 # ELF-NEXT:     Other: 0
-# ELF-NEXT:     Section: .dynsym
+# ELF-NEXT:     Section: .stub
 # ELF-NEXT:   }
 # ELF-NEXT: ]
 
@@ -119,7 +129,7 @@ Sections:
       - Tag:   DT_STRTAB
         Value: 0x200
       - Tag:   DT_STRSZ
-        Value: 0x68
+        Value: 0x75
       - Tag:   DT_NULL
         Value: 0x0
 DynamicSymbols:
@@ -166,6 +176,9 @@ DynamicSymbols:
     Section:    .tdata
     Binding:    STB_GNU_UNIQUE
     Size:       4
+  - Name:       unique_undef
+    Type:       STT_OBJECT
+    Binding:    STB_GNU_UNIQUE
 ProgramHeaders:
   - Type:     PT_LOAD
     Flags:    [ PF_R, PF_W ]

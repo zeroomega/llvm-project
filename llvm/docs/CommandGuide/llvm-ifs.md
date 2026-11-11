@@ -98,6 +98,8 @@ A minimum ELF file that can be used by linker should have following sections pro
   - `DT_VERNEED` entry. (optional)
   - `DT_VERNEEDNUM` entry. (optional)
 
+- Synthetic stub address section (`.stub` `SHT_NOBITS` section).
+
 - Section header string table (`.shstrtab` section)
 
 This ELF file may have compatibility issues with ELF analysis tools that rely on the program headers.
