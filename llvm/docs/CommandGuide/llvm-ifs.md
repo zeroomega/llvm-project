@@ -35,7 +35,7 @@ Symbols:
   - { Name: sym2, Type: Func, Weak: false }
   - { Name: sym3, Type: TLS }
   - { Name: sym4, Type: Unknown, Warning: foo }
-  - { Name: sym5, Version: VER_1, Type: Func }
+  - { Name: sym5, Version: VER_1, Type: Func, Default: true }
 ...
 ```
 
@@ -56,7 +56,7 @@ Symbols:
   - `Version` (optional): Symbol version.
   - `Type`: Whether the symbol is an object, function, no-type, thread local storage, or unknown. Symbol types not explicitly supported are mapped as unknown to improve signal-to-noise ratio.
   - `Size`: The size of the symbol in question, doesn't apply to functions, and is optional for NoType symbols.
-  - `Default`: Whether or not the symbol is a default version symbol in this shared object file.
+  - `Default`: Whether or not a defined versioned symbol is the default (`@@Version`) version in this shared object file. Defaults to `false` (emitting a non-default `@Version` symbol when `Version` is specified).
   - `Undefined`: Whether or not the symbol is defined in this shared object file.
   - `Weak`: Whether or not the symbol should be treated as weak.
   - `Warning` (optional): Warning text to output when this symbol is linked against.
@@ -83,6 +83,8 @@ A minimum ELF file that can be used by linker should have following sections pro
 
 - Version definition table (`.gnu.version_d` section). (optional)
 
+- Version dependency table (`.gnu.version_r` section). (optional)
+
 - Dynamic table (`.dynamic` section).
 
   - `DT_SYMTAB` entry.
@@ -92,6 +94,9 @@ A minimum ELF file that can be used by linker should have following sections pro
   - `DT_SONAME` entry. (optional)
   - `DT_VERSYM` entry. (optional)
   - `DT_VERDEF` entry. (optional)
+  - `DT_VERDEFNUM` entry. (optional)
+  - `DT_VERNEED` entry. (optional)
+  - `DT_VERNEEDNUM` entry. (optional)
 
 - Section header string table (`.shstrtab` section)
 

@@ -71,6 +71,30 @@ TEST(ElfYamlTextAPI, YAMLReadsInvalidSymbols) {
   ASSERT_THAT_ERROR(
       StubOrErr.takeError(),
       FailedWithMessage("IFS symbol type for symbol 'not' is unsupported"));
+
+  const char DefaultWithoutVersion[] =
+      "--- !ifs-v1\n"
+      "IfsVersion: 3.0\n"
+      "Target: x86_64-unknown-linux-gnu\n"
+      "Symbols:\n"
+      "  - { Name: unversioned, Type: Func, Default: true }\n"
+      "...\n";
+  ASSERT_THAT_ERROR(readIFSFromBuffer(DefaultWithoutVersion).takeError(),
+                    FailedWithMessage("IFS symbol 'unversioned' cannot be "
+                                      "marked Default without a defined "
+                                      "Version"));
+
+  const char DefaultOnUndefined[] =
+      "--- !ifs-v1\n"
+      "IfsVersion: 3.0\n"
+      "Target: x86_64-unknown-linux-gnu\n"
+      "Symbols:\n"
+      "  - { Name: ext, Version: V1, Type: Func, Default: true, Undefined: "
+      "true }\n"
+      "...\n";
+  ASSERT_THAT_ERROR(readIFSFromBuffer(DefaultOnUndefined).takeError(),
+                    FailedWithMessage("IFS symbol 'ext' cannot be marked "
+                                      "Default without a defined Version"));
 }
 
 TEST(ElfYamlTextAPI, YAMLReadsTBESymbols) {

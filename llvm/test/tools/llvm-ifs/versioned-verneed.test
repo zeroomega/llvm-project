@@ -1,0 +1,377 @@
+## Test reading and writing ELF symbol version dependencies (.gnu.version_r)
+## using a single synthetic Elf_Verneed entry, both standalone and alongside
+## .gnu.version_d.
+
+## 1. Verneed-only IFS -> ELF -> IFS round-trip (no .gnu.version_d emitted),
+##    plus --strip-undefined removing .gnu.version and .gnu.version_r cleanly.
+# RUN: yaml2obj --docnum=1 %s -o %t.verneed_only.in.so
+# RUN: llvm-ifs --input-format=ELF --output-ifs=%t.verneed_only.ifs --output-elf=%t.verneed_only.stub.so %t.verneed_only.in.so
+# RUN: FileCheck %s --check-prefix=VERNEED-ONLY-IFS < %t.verneed_only.ifs
+# RUN: llvm-readelf --sections --dynamic-table --dyn-syms -V %t.verneed_only.stub.so | FileCheck %s --check-prefix=VERNEED-ONLY-ELF
+# RUN: llvm-ifs --input-format=ELF --output-ifs=%t.verneed_only.rt.ifs %t.verneed_only.stub.so
+# RUN: diff -u %t.verneed_only.ifs %t.verneed_only.rt.ifs
+# RUN: llvm-ifs --input-format=ELF --strip-undefined --output-elf=%t.verneed_stripped.stub.so %t.verneed_only.in.so
+# RUN: llvm-readelf --sections --dynamic-table %t.verneed_stripped.stub.so | FileCheck %s --check-prefix=STRIPPED-ELF
+
+# VERNEED-ONLY-IFS:      Symbols:
+# VERNEED-ONLY-IFS-NEXT:   - { Name: defined_unver, Type: Func }
+# VERNEED-ONLY-IFS-NEXT:   - { Name: strong_dep, Version: GLIBC_2.2.5, Type: Func, Undefined: true }
+# VERNEED-ONLY-IFS-NEXT:   - { Name: undef_unver, Type: Func, Undefined: true }
+# VERNEED-ONLY-IFS-NEXT:   - { Name: weak_dep, Version: GLIBC_2.34, Type: Func, Undefined: true, Weak: true }
+
+# VERNEED-ONLY-ELF-NOT:  .gnu.version_d
+# VERNEED-ONLY-ELF:      .gnu.version      VERSYM
+# VERNEED-ONLY-ELF-NEXT: .gnu.version_r    VERNEED
+# VERNEED-ONLY-ELF-NOT:  VERDEF
+# VERNEED-ONLY-ELF:      (VERSYM)
+# VERNEED-ONLY-ELF-NEXT: (VERNEED)
+# VERNEED-ONLY-ELF-NEXT: (VERNEEDNUM)      1
+# VERNEED-ONLY-ELF:      FUNC    GLOBAL DEFAULT    1 defined_unver{{$}}
+# VERNEED-ONLY-ELF-NEXT: FUNC    GLOBAL DEFAULT  UND strong_dep@GLIBC_2.2.5{{$}}
+# VERNEED-ONLY-ELF-NEXT: FUNC    GLOBAL DEFAULT  UND undef_unver{{$}}
+# VERNEED-ONLY-ELF-NEXT: FUNC    WEAK   DEFAULT  UND weak_dep@GLIBC_2.34{{$}}
+# VERNEED-ONLY-ELF:      Version needs section '.gnu.version_r' contains 1 entries:
+# VERNEED-ONLY-ELF:        Cnt: 2
+# VERNEED-ONLY-ELF-NEXT:   0x0010:   Name: GLIBC_2.2.5  Flags: none  Version: 2
+# VERNEED-ONLY-ELF-NEXT:   0x0020:   Name: GLIBC_2.34  Flags: WEAK  Version: 3
+
+# STRIPPED-ELF-NOT: .gnu.version
+# STRIPPED-ELF-NOT: VERSYM
+# STRIPPED-ELF-NOT: VERNEED
+
+## 2. Combined .gnu.version_d + multi-vn_file .gnu.version_r with overlapping
+##    version name ("COMMON_1.0" in both verdef and verneed), weak-then-strong
+##    Vernaux flag promotion (markStrong), VER_NDX_LOCAL defined symbol
+##    filtering, and 32-bit big-endian (ELF32BE) round-trip.
+# RUN: yaml2obj --docnum=2 %s -o %t.both.in.so
+# RUN: llvm-ifs --input-format=ELF --output-ifs=%t.both.ifs --output-elf=%t.both.stub.so %t.both.in.so
+# RUN: FileCheck %s --check-prefix=BOTH-IFS < %t.both.ifs
+# RUN: llvm-readelf --dynamic-table --dyn-syms -V %t.both.stub.so | FileCheck %s --check-prefix=BOTH-ELF
+# RUN: llvm-ifs --input-format=ELF --output-ifs=%t.both.rt.ifs %t.both.stub.so
+# RUN: diff -u %t.both.ifs %t.both.rt.ifs
+# RUN: llvm-ifs --input-format=IFS --strip-ifs-target --output-ifs=%t.both.notarget.ifs %t.both.ifs
+# RUN: llvm-ifs --input-format=IFS --arch=ppc --bitwidth=32 --endianness=big --output-elf=%t.both.be32.so %t.both.notarget.ifs
+# RUN: llvm-readelf --dynamic-table --dyn-syms -V %t.both.be32.so | FileCheck %s --check-prefix=BOTH-ELF
+# RUN: llvm-ifs --input-format=ELF --strip-ifs-target --output-ifs=%t.both.be32.ifs %t.both.be32.so
+# RUN: diff -u %t.both.notarget.ifs %t.both.be32.ifs
+
+# BOTH-IFS:      Symbols:
+# BOTH-IFS-NEXT:   - { Name: api_fn, Version: COMMON_1.0, Type: Func, Default: true }
+# BOTH-IFS-NEXT:   - { Name: api_fn, Version: LEGACY_0.9, Type: Func }
+# BOTH-IFS-NEXT:   - { Name: ext_a, Version: COMMON_1.0, Type: Func, Undefined: true, Weak: true }
+# BOTH-IFS-NEXT:   - { Name: ext_b, Version: COMMON_1.0, Type: Func, Undefined: true }
+# BOTH-IFS-NEXT:   - { Name: ext_c, Version: DEP2_2.0, Type: Object, Size: 8, Undefined: true }
+# BOTH-IFS-NOT:    local_sym
+
+# BOTH-ELF:      (VERSYM)
+# BOTH-ELF-NEXT: (VERDEF)
+# BOTH-ELF-NEXT: (VERDEFNUM)       3
+# BOTH-ELF-NEXT: (VERNEED)
+# BOTH-ELF-NEXT: (VERNEEDNUM)      1
+# BOTH-ELF:      FUNC    GLOBAL DEFAULT    1 api_fn@@COMMON_1.0{{$}}
+# BOTH-ELF-NEXT: FUNC    GLOBAL DEFAULT    1 api_fn@LEGACY_0.9{{$}}
+# BOTH-ELF-NEXT: FUNC    WEAK   DEFAULT  UND ext_a@COMMON_1.0{{$}}
+# BOTH-ELF-NEXT: FUNC    GLOBAL DEFAULT  UND ext_b@COMMON_1.0{{$}}
+# BOTH-ELF-NEXT: OBJECT  GLOBAL DEFAULT  UND ext_c@DEP2_2.0{{$}}
+# BOTH-ELF:      Version definition section '.gnu.version_d' contains 3 entries:
+# BOTH-ELF:        Rev: 1  Flags: BASE  Index: 1  Cnt: 1  Name: libboth.so
+# BOTH-ELF-NEXT:   Rev: 1  Flags: none  Index: 2  Cnt: 1  Name: COMMON_1.0
+# BOTH-ELF-NEXT:   Rev: 1  Flags: none  Index: 3  Cnt: 1  Name: LEGACY_0.9
+# BOTH-ELF:      Version needs section '.gnu.version_r' contains 1 entries:
+# BOTH-ELF:        Cnt: 2
+# BOTH-ELF-NEXT:   0x0010:   Name: COMMON_1.0  Flags: none  Version: 4
+# BOTH-ELF-NEXT:   0x0020:   Name: DEP2_2.0  Flags: none  Version: 5
+
+## 3. Corrupt missing verneed index is rejected.
+# RUN: yaml2obj --docnum=3 %s -o %t.bad_verneed.so
+# RUN: not llvm-ifs --input-format=ELF --output-ifs=- %t.bad_verneed.so 2>&1 | FileCheck %s --check-prefix=ERR-VERNEED
+# ERR-VERNEED: error: SHT_GNU_versym section refers to a version need index 5 which is missing
+
+## 4. Corrupt missing defined verdef index is rejected.
+# RUN: yaml2obj --docnum=4 %s -o %t.bad_verdef.so
+# RUN: not llvm-ifs --input-format=ELF --output-ifs=- %t.bad_verdef.so 2>&1 | FileCheck %s --check-prefix=ERR-VERDEF
+# ERR-VERDEF: error: SHT_GNU_versym section refers to a version index 9 which is missing
+
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  Type:    ET_DYN
+  Machine: EM_X86_64
+Sections:
+  - Name:  .dynstr
+    Type:  SHT_STRTAB
+    Flags: [ SHF_ALLOC ]
+  - Name:  .dynsym
+    Type:  SHT_DYNSYM
+    Flags: [ SHF_ALLOC ]
+    Link:  .dynstr
+  - Name:    .gnu.version
+    Type:    SHT_GNU_versym
+    Flags:   [ SHF_ALLOC ]
+    Link:    .dynsym
+    Entries: [ 0, 1, 2, 0, 3 ]
+  - Name:         .gnu.version_r
+    Type:         SHT_GNU_verneed
+    Flags:        [ SHF_ALLOC ]
+    AddressAlign: 4
+    Link:         .dynstr
+    Info:         1
+    Dependencies:
+      - Version: 1
+        File:    libc.so.6
+        Entries:
+          - Name:  GLIBC_2.2.5
+            Hash:  0x09691a75
+            Flags: 0
+            Other: 2
+          - Name:  GLIBC_2.34
+            Hash:  0x069691b4
+            Flags: 2
+            Other: 3
+  - Name:  .text
+    Type:  SHT_PROGBITS
+    Flags: [ SHF_ALLOC, SHF_EXECINSTR ]
+  - Name:  .dynamic
+    Type:  SHT_DYNAMIC
+    Flags: [ SHF_ALLOC ]
+    Link:  .dynstr
+    Entries:
+      - Tag:   DT_STRTAB
+        Value: 0
+      - Tag:   DT_STRSZ
+        Value: 0x200
+      - Tag:   DT_SYMTAB
+        Value: 0
+      - Tag:   DT_NEEDED
+        Value: 1
+      - Tag:   DT_NULL
+        Value: 0
+DynamicSymbols:
+  - Name:    defined_unver
+    Type:    STT_FUNC
+    Section: .text
+    Binding: STB_GLOBAL
+  - Name:    strong_dep
+    Type:    STT_FUNC
+    Binding: STB_GLOBAL
+  - Name:    undef_unver
+    Type:    STT_FUNC
+    Binding: STB_GLOBAL
+  - Name:    weak_dep
+    Type:    STT_FUNC
+    Binding: STB_WEAK
+ProgramHeaders:
+  - Type:     PT_LOAD
+    Flags:    [ PF_R, PF_X ]
+    FirstSec: .dynstr
+    LastSec:  .dynamic
+  - Type:     PT_DYNAMIC
+    Flags:    [ PF_R ]
+    FirstSec: .dynamic
+    LastSec:  .dynamic
+
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  Type:    ET_DYN
+  Machine: EM_X86_64
+Sections:
+  - Name:  .dynstr
+    Type:  SHT_STRTAB
+    Flags: [ SHF_ALLOC ]
+  - Name:  .dynsym
+    Type:  SHT_DYNSYM
+    Flags: [ SHF_ALLOC ]
+    Link:  .dynstr
+  - Name:    .gnu.version
+    Type:    SHT_GNU_versym
+    Flags:   [ SHF_ALLOC ]
+    Link:    .dynsym
+    Entries: [ 0, 2, 0x8003, 5, 4, 6, 0 ]
+  - Name:         .gnu.version_d
+    Type:         SHT_GNU_verdef
+    Flags:        [ SHF_ALLOC ]
+    AddressAlign: 4
+    Link:         .dynstr
+    Info:         3
+    Entries:
+      - VersionNdx: 1
+        Flags:      1
+        Names:      [ libboth.so ]
+      - VersionNdx: 2
+        Names:      [ COMMON_1.0 ]
+      - VersionNdx: 3
+        Names:      [ LEGACY_0.9 ]
+  - Name:         .gnu.version_r
+    Type:         SHT_GNU_verneed
+    Flags:        [ SHF_ALLOC ]
+    AddressAlign: 4
+    Link:         .dynstr
+    Info:         2
+    Dependencies:
+      - Version: 1
+        File:    libdep1.so
+        Entries:
+          - Name:  COMMON_1.0
+            Hash:  0
+            Flags: 0
+            Other: 4
+      - Version: 1
+        File:    libdep2.so
+        Entries:
+          - Name:  COMMON_1.0
+            Hash:  0
+            Flags: 2
+            Other: 5
+          - Name:  DEP2_2.0
+            Hash:  0
+            Flags: 0
+            Other: 6
+  - Name:  .text
+    Type:  SHT_PROGBITS
+    Flags: [ SHF_ALLOC, SHF_EXECINSTR ]
+  - Name:  .dynamic
+    Type:  SHT_DYNAMIC
+    Flags: [ SHF_ALLOC ]
+    Link:  .dynstr
+    Entries:
+      - Tag:   DT_STRTAB
+        Value: 0
+      - Tag:   DT_STRSZ
+        Value: 0x200
+      - Tag:   DT_SYMTAB
+        Value: 0
+      - Tag:   DT_SONAME
+        Value: 1
+      - Tag:   DT_NULL
+        Value: 0
+DynamicSymbols:
+  - Name:    'api_fn (1)'
+    Type:    STT_FUNC
+    Section: .text
+    Binding: STB_GLOBAL
+  - Name:    'api_fn (2)'
+    Type:    STT_FUNC
+    Section: .text
+    Binding: STB_GLOBAL
+  - Name:    ext_a
+    Type:    STT_FUNC
+    Binding: STB_WEAK
+  - Name:    ext_b
+    Type:    STT_FUNC
+    Binding: STB_GLOBAL
+  - Name:    ext_c
+    Type:    STT_OBJECT
+    Size:    8
+    Binding: STB_GLOBAL
+  - Name:    local_sym
+    Type:    STT_FUNC
+    Section: .text
+    Binding: STB_GLOBAL
+ProgramHeaders:
+  - Type:     PT_LOAD
+    Flags:    [ PF_R, PF_X ]
+    FirstSec: .dynstr
+    LastSec:  .dynamic
+  - Type:     PT_DYNAMIC
+    Flags:    [ PF_R ]
+    FirstSec: .dynamic
+    LastSec:  .dynamic
+
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  Type:    ET_DYN
+  Machine: EM_X86_64
+Sections:
+  - Name:  .dynstr
+    Type:  SHT_STRTAB
+    Flags: [ SHF_ALLOC ]
+  - Name:  .dynsym
+    Type:  SHT_DYNSYM
+    Flags: [ SHF_ALLOC ]
+    Link:  .dynstr
+  - Name:    .gnu.version
+    Type:    SHT_GNU_versym
+    Flags:   [ SHF_ALLOC ]
+    Link:    .dynsym
+    Entries: [ 0, 5 ]
+  - Name:  .dynamic
+    Type:  SHT_DYNAMIC
+    Flags: [ SHF_ALLOC ]
+    Link:  .dynstr
+    Entries:
+      - Tag:   DT_STRTAB
+        Value: 0
+      - Tag:   DT_STRSZ
+        Value: 0x100
+      - Tag:   DT_SYMTAB
+        Value: 0
+      - Tag:   DT_NULL
+        Value: 0
+DynamicSymbols:
+  - Name:    missing_verneed
+    Type:    STT_FUNC
+    Binding: STB_GLOBAL
+ProgramHeaders:
+  - Type:     PT_LOAD
+    Flags:    [ PF_R ]
+    FirstSec: .dynstr
+    LastSec:  .dynamic
+  - Type:     PT_DYNAMIC
+    Flags:    [ PF_R ]
+    FirstSec: .dynamic
+    LastSec:  .dynamic
+
+--- !ELF
+FileHeader:
+  Class:   ELFCLASS64
+  Data:    ELFDATA2LSB
+  Type:    ET_DYN
+  Machine: EM_X86_64
+Sections:
+  - Name:  .dynstr
+    Type:  SHT_STRTAB
+    Flags: [ SHF_ALLOC ]
+  - Name:  .dynsym
+    Type:  SHT_DYNSYM
+    Flags: [ SHF_ALLOC ]
+    Link:  .dynstr
+  - Name:    .gnu.version
+    Type:    SHT_GNU_versym
+    Flags:   [ SHF_ALLOC ]
+    Link:    .dynsym
+    Entries: [ 0, 9 ]
+  - Name:  .text
+    Type:  SHT_PROGBITS
+    Flags: [ SHF_ALLOC, SHF_EXECINSTR ]
+  - Name:  .dynamic
+    Type:  SHT_DYNAMIC
+    Flags: [ SHF_ALLOC ]
+    Link:  .dynstr
+    Entries:
+      - Tag:   DT_STRTAB
+        Value: 0
+      - Tag:   DT_STRSZ
+        Value: 0x100
+      - Tag:   DT_SYMTAB
+        Value: 0
+      - Tag:   DT_NULL
+        Value: 0
+DynamicSymbols:
+  - Name:    missing_verdef
+    Type:    STT_FUNC
+    Section: .text
+    Binding: STB_GLOBAL
+ProgramHeaders:
+  - Type:     PT_LOAD
+    Flags:    [ PF_R, PF_X ]
+    FirstSec: .dynstr
+    LastSec:  .dynamic
+  - Type:     PT_DYNAMIC
+    Flags:    [ PF_R ]
+    FirstSec: .dynamic
+    LastSec:  .dynamic

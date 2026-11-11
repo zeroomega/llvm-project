@@ -208,6 +208,11 @@ Expected<std::unique_ptr<IFSStub>> ifs::readIFSFromBuffer(StringRef Buf) {
       return createStringError(
           std::make_error_code(std::errc::invalid_argument),
           "IFS symbol type for symbol '" + Item.Name + "' is unsupported");
+    if (Item.Default && (Item.Version.empty() || Item.Undefined))
+      return createStringError(
+          std::make_error_code(std::errc::invalid_argument),
+          "IFS symbol '" + Item.Name +
+              "' cannot be marked Default without a defined Version");
   }
   return std::move(Stub);
 }
