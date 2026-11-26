@@ -8,9 +8,13 @@
 
 #include "llvm/ADT/StringRef.h"
 #include "llvm/BinaryFormat/ELF.h"
+#include "llvm/InterfaceStub/ELFObjHandler.h"
 #include "llvm/InterfaceStub/IFSHandler.h"
 #include "llvm/InterfaceStub/IFSStub.h"
 #include "llvm/Support/Error.h"
+#include "llvm/Support/FileSystem.h"
+#include "llvm/Support/FileUtilities.h"
+#include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Testing/Support/Error.h"
 #include "gtest/gtest.h"
 #include <string>
@@ -103,6 +107,7 @@ TEST(ElfYamlTextAPI, YAMLReadsTBESymbols) {
   EXPECT_EQ(SymBar.Type, IFSSymbolType::Object);
   EXPECT_FALSE(SymBar.Undefined);
   EXPECT_FALSE(SymBar.Weak);
+  EXPECT_FALSE(SymBar.Unique);
   EXPECT_FALSE(SymBar.Warning);
 
   IFSSymbol const &SymBaz = *Iterator++;
@@ -111,6 +116,7 @@ TEST(ElfYamlTextAPI, YAMLReadsTBESymbols) {
   EXPECT_EQ(SymBaz.Type, IFSSymbolType::TLS);
   EXPECT_FALSE(SymBaz.Undefined);
   EXPECT_FALSE(SymBaz.Weak);
+  EXPECT_FALSE(SymBaz.Unique);
   EXPECT_FALSE(SymBaz.Warning.has_value());
 
   IFSSymbol const &SymFoo = *Iterator++;
@@ -119,6 +125,7 @@ TEST(ElfYamlTextAPI, YAMLReadsTBESymbols) {
   EXPECT_EQ(SymFoo.Type, IFSSymbolType::Func);
   EXPECT_FALSE(SymFoo.Undefined);
   EXPECT_FALSE(SymFoo.Weak);
+  EXPECT_FALSE(SymFoo.Unique);
   EXPECT_TRUE(SymFoo.Warning.has_value());
   EXPECT_STREQ(SymFoo.Warning->c_str(), "Deprecated!");
 
@@ -128,6 +135,7 @@ TEST(ElfYamlTextAPI, YAMLReadsTBESymbols) {
   EXPECT_EQ(SymNor.Type, IFSSymbolType::NoType);
   EXPECT_TRUE(SymNor.Undefined);
   EXPECT_FALSE(SymNor.Weak);
+  EXPECT_FALSE(SymNor.Unique);
   EXPECT_FALSE(SymNor.Warning.has_value());
 
   IFSSymbol const &SymNot = *Iterator++;
@@ -136,6 +144,7 @@ TEST(ElfYamlTextAPI, YAMLReadsTBESymbols) {
   EXPECT_EQ(SymNot.Type, IFSSymbolType::NoType);
   EXPECT_TRUE(SymNot.Undefined);
   EXPECT_TRUE(SymNot.Weak);
+  EXPECT_FALSE(SymNot.Unique);
   EXPECT_TRUE(SymNot.Warning);
   EXPECT_STREQ(SymNot.Warning->c_str(), "All fields populated!");
 }
@@ -267,4 +276,190 @@ TEST(ElfYamlTextAPI, YAMLWritesNoTBESyms) {
   raw_string_ostream OS(Result);
   ASSERT_THAT_ERROR(writeIFSToOutputStream(OS, Stub), Succeeded());
   compareByLine(Result.c_str(), Expected);
+}
+
+TEST(ElfYamlTextAPI, YAMLUniqueSymbols) {
+  const char Data[] =
+      "--- !ifs-v1\n"
+      "IfsVersion:      3.0\n"
+      "Target:          { ObjectFormat: ELF, Arch: x86_64, Endianness: "
+      "little, BitWidth: 64 }\n"
+      "Symbols:\n"
+      "  - { Name: global_obj, Type: Object, Size: 4 }\n"
+      "  - { Name: unique_false, Type: Object, Size: 4, Unique: false }\n"
+      "  - { Name: unique_obj, Type: Object, Size: 8, Unique: true }\n"
+      "  - { Name: unique_tls, Type: TLS, Size: 4, Unique: true }\n"
+      "  - { Name: weak_obj, Type: Object, Size: 4, Weak: true }\n"
+      "...\n";
+  Expected<std::unique_ptr<IFSStub>> StubOrErr = readIFSFromBuffer(Data);
+  ASSERT_THAT_ERROR(StubOrErr.takeError(), Succeeded());
+  std::unique_ptr<IFSStub> Stub = std::move(*StubOrErr);
+  ASSERT_EQ(Stub->Symbols.size(), 5u);
+
+  EXPECT_FALSE(Stub->Symbols[0].Weak);
+  EXPECT_FALSE(Stub->Symbols[0].Unique);
+  EXPECT_FALSE(Stub->Symbols[1].Weak);
+  EXPECT_FALSE(Stub->Symbols[1].Unique);
+  EXPECT_FALSE(Stub->Symbols[2].Weak);
+  EXPECT_TRUE(Stub->Symbols[2].Unique);
+  EXPECT_FALSE(Stub->Symbols[3].Weak);
+  EXPECT_TRUE(Stub->Symbols[3].Unique);
+  EXPECT_TRUE(Stub->Symbols[4].Weak);
+  EXPECT_FALSE(Stub->Symbols[4].Unique);
+
+  const char ExpectedOut[] =
+      "--- !ifs-v1\n"
+      "IfsVersion:      3.0\n"
+      "Target:          { ObjectFormat: ELF, Arch: x86_64, Endianness: "
+      "little, BitWidth: 64 }\n"
+      "Symbols:\n"
+      "  - { Name: global_obj, Type: Object, Size: 4 }\n"
+      "  - { Name: unique_false, Type: Object, Size: 4 }\n"
+      "  - { Name: unique_obj, Type: Object, Size: 8, Unique: true }\n"
+      "  - { Name: unique_tls, Type: TLS, Size: 4, Unique: true }\n"
+      "  - { Name: weak_obj, Type: Object, Size: 4, Weak: true }\n"
+      "...\n";
+  std::string Result;
+  raw_string_ostream OS(Result);
+  ASSERT_THAT_ERROR(writeIFSToOutputStream(OS, *Stub), Succeeded());
+  compareByLine(Result, ExpectedOut);
+
+  const char InvalidBoth[] =
+      "--- !ifs-v1\n"
+      "IfsVersion:      3.0\n"
+      "Target:          { ObjectFormat: ELF, Arch: x86_64, Endianness: "
+      "little, BitWidth: 64 }\n"
+      "Symbols:\n"
+      "  - { Name: bad_sym, Type: Object, Size: 4, Weak: true, Unique: true }\n"
+      "...\n";
+  ASSERT_THAT_ERROR(
+      readIFSFromBuffer(InvalidBoth).takeError(),
+      FailedWithMessage("IFS symbol 'bad_sym' cannot be both Weak and Unique"));
+
+  IFSStub InvalidStub = *Stub;
+  IFSSymbol BadSym("bad_sym");
+  BadSym.Type = IFSSymbolType::Object;
+  BadSym.Size = 4u;
+  BadSym.Weak = true;
+  BadSym.Unique = true;
+  InvalidStub.Symbols = {BadSym};
+  std::string UnusedOut;
+  raw_string_ostream InvalidOS(UnusedOut);
+  ASSERT_THAT_ERROR(
+      writeIFSToOutputStream(InvalidOS, InvalidStub),
+      FailedWithMessage("IFS symbol 'bad_sym' cannot be both Weak and Unique"));
+}
+
+TEST(ElfYamlTextAPI, ELFUniqueStubRoundTrip) {
+  SmallString<128> TempPath;
+  ASSERT_FALSE(sys::fs::createTemporaryFile("ifs-unique", "so", TempPath));
+  FileRemover Cleanup(TempPath);
+
+  struct TargetCase {
+    IFSArch Arch;
+    IFSBitWidthType BitWidth;
+    IFSEndiannessType Endianness;
+  };
+  const TargetCase Targets[] = {
+      {ELF::EM_X86_64, IFSBitWidthType::IFS64, IFSEndiannessType::Little},
+      {ELF::EM_PPC64, IFSBitWidthType::IFS64, IFSEndiannessType::Big},
+      {ELF::EM_386, IFSBitWidthType::IFS32, IFSEndiannessType::Little},
+      {ELF::EM_PPC, IFSBitWidthType::IFS32, IFSEndiannessType::Big},
+  };
+
+  IFSSymbol GlobalSym("global_obj");
+  GlobalSym.Type = IFSSymbolType::Object;
+  GlobalSym.Size = 4u;
+
+  IFSSymbol UndefUniqueSym("undef_unique");
+  UndefUniqueSym.Type = IFSSymbolType::Object;
+  UndefUniqueSym.Size = 8u;
+  UndefUniqueSym.Undefined = true;
+  UndefUniqueSym.Unique = true;
+
+  IFSSymbol UniqueSym("unique_obj");
+  UniqueSym.Type = IFSSymbolType::Object;
+  UniqueSym.Size = 8u;
+  UniqueSym.Unique = true;
+
+  IFSSymbol WeakSym("weak_obj");
+  WeakSym.Type = IFSSymbolType::Object;
+  WeakSym.Size = 4u;
+  WeakSym.Weak = true;
+
+  for (const TargetCase &TC : Targets) {
+    IFSStub UniqueStub;
+    UniqueStub.IfsVersion = VersionTuple(3, 0);
+    UniqueStub.Target.Arch = TC.Arch;
+    UniqueStub.Target.BitWidth = TC.BitWidth;
+    UniqueStub.Target.Endianness = TC.Endianness;
+    UniqueStub.Target.ObjectFormat = "ELF";
+    UniqueStub.Symbols = {GlobalSym, UndefUniqueSym, UniqueSym, WeakSym};
+
+    ASSERT_THAT_ERROR(writeBinaryStub(TempPath, UniqueStub), Succeeded());
+
+    ErrorOr<std::unique_ptr<MemoryBuffer>> BufOrErr =
+        MemoryBuffer::getFile(TempPath);
+    ASSERT_TRUE(static_cast<bool>(BufOrErr));
+    ASSERT_GE((*BufOrErr)->getBufferSize(), static_cast<size_t>(EI_NIDENT));
+    EXPECT_EQ(static_cast<uint8_t>((*BufOrErr)->getBufferStart()[EI_OSABI]),
+              static_cast<uint8_t>(ELFOSABI_GNU));
+
+    Expected<std::unique_ptr<IFSStub>> RoundTripOrErr =
+        readELFFile((*BufOrErr)->getMemBufferRef());
+    ASSERT_THAT_ERROR(RoundTripOrErr.takeError(), Succeeded());
+    ASSERT_EQ((*RoundTripOrErr)->Symbols.size(), 4u);
+    EXPECT_EQ((*RoundTripOrErr)->Symbols[0].Name, "global_obj");
+    EXPECT_FALSE((*RoundTripOrErr)->Symbols[0].Undefined);
+    EXPECT_FALSE((*RoundTripOrErr)->Symbols[0].Weak);
+    EXPECT_FALSE((*RoundTripOrErr)->Symbols[0].Unique);
+    EXPECT_EQ((*RoundTripOrErr)->Symbols[1].Name, "undef_unique");
+    EXPECT_TRUE((*RoundTripOrErr)->Symbols[1].Undefined);
+    EXPECT_FALSE((*RoundTripOrErr)->Symbols[1].Weak);
+    EXPECT_TRUE((*RoundTripOrErr)->Symbols[1].Unique);
+    EXPECT_EQ((*RoundTripOrErr)->Symbols[2].Name, "unique_obj");
+    EXPECT_FALSE((*RoundTripOrErr)->Symbols[2].Undefined);
+    EXPECT_FALSE((*RoundTripOrErr)->Symbols[2].Weak);
+    EXPECT_TRUE((*RoundTripOrErr)->Symbols[2].Unique);
+    EXPECT_EQ((*RoundTripOrErr)->Symbols[3].Name, "weak_obj");
+    EXPECT_FALSE((*RoundTripOrErr)->Symbols[3].Undefined);
+    EXPECT_TRUE((*RoundTripOrErr)->Symbols[3].Weak);
+    EXPECT_FALSE((*RoundTripOrErr)->Symbols[3].Unique);
+
+    IFSStub NonUniqueStub = UniqueStub;
+    NonUniqueStub.Symbols = {GlobalSym, WeakSym};
+    ASSERT_THAT_ERROR(writeBinaryStub(TempPath, NonUniqueStub), Succeeded());
+
+    BufOrErr = MemoryBuffer::getFile(TempPath);
+    ASSERT_TRUE(static_cast<bool>(BufOrErr));
+    ASSERT_GE((*BufOrErr)->getBufferSize(), static_cast<size_t>(EI_NIDENT));
+    EXPECT_EQ(static_cast<uint8_t>((*BufOrErr)->getBufferStart()[EI_OSABI]),
+              static_cast<uint8_t>(ELFOSABI_NONE));
+
+    IFSStub EmptyStub = UniqueStub;
+    EmptyStub.Symbols.clear();
+    ASSERT_THAT_ERROR(writeBinaryStub(TempPath, EmptyStub), Succeeded());
+
+    BufOrErr = MemoryBuffer::getFile(TempPath);
+    ASSERT_TRUE(static_cast<bool>(BufOrErr));
+    ASSERT_GE((*BufOrErr)->getBufferSize(), static_cast<size_t>(EI_NIDENT));
+    EXPECT_EQ(static_cast<uint8_t>((*BufOrErr)->getBufferStart()[EI_OSABI]),
+              static_cast<uint8_t>(ELFOSABI_NONE));
+  }
+
+  IFSStub InvalidStub;
+  InvalidStub.IfsVersion = VersionTuple(3, 0);
+  InvalidStub.Target.Arch = ELF::EM_X86_64;
+  InvalidStub.Target.BitWidth = IFSBitWidthType::IFS64;
+  InvalidStub.Target.Endianness = IFSEndiannessType::Little;
+  InvalidStub.Target.ObjectFormat = "ELF";
+  IFSSymbol BadSym("bad_sym");
+  BadSym.Type = IFSSymbolType::Object;
+  BadSym.Size = 4u;
+  BadSym.Weak = true;
+  BadSym.Unique = true;
+  InvalidStub.Symbols = {BadSym};
+  ASSERT_THAT_ERROR(
+      writeBinaryStub(TempPath, InvalidStub),
+      FailedWithMessage("IFS symbol 'bad_sym' cannot be both Weak and Unique"));
 }

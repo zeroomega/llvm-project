@@ -128,6 +128,7 @@ template <> struct MappingTraits<IFSSymbol> {
     }
     IO.mapOptional("Undefined", Symbol.Undefined, false);
     IO.mapOptional("Weak", Symbol.Weak, false);
+    IO.mapOptional("Unique", Symbol.Unique, false);
     IO.mapOptional("Warning", Symbol.Warning);
   }
 
@@ -206,11 +207,21 @@ Expected<std::unique_ptr<IFSStub>> ifs::readIFSFromBuffer(StringRef Buf) {
       return createStringError(
           std::make_error_code(std::errc::invalid_argument),
           "IFS symbol type for symbol '" + Item.Name + "' is unsupported");
+    if (Item.Weak && Item.Unique)
+      return createStringError(
+          std::make_error_code(std::errc::invalid_argument),
+          "IFS symbol '" + Item.Name + "' cannot be both Weak and Unique");
   }
   return std::move(Stub);
 }
 
 Error ifs::writeIFSToOutputStream(raw_ostream &OS, const IFSStub &Stub) {
+  for (const IFSSymbol &Item : Stub.Symbols) {
+    if (Item.Weak && Item.Unique)
+      return createStringError(
+          std::make_error_code(std::errc::invalid_argument),
+          "IFS symbol '" + Item.Name + "' cannot be both Weak and Unique");
+  }
   yaml::Output YamlOut(OS, nullptr, /*WrapColumn =*/0);
   std::unique_ptr<IFSStubTriple> CopyStub(new IFSStubTriple(Stub));
   if (Stub.Target.Arch) {

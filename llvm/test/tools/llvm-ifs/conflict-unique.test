@@ -1,0 +1,62 @@
+## Test IFS "Unique: true" symbol merging, ELF stub emission, and
+## mutual-exclusion validation with "Weak: true".
+
+# RUN: rm -rf %t && split-file %s %t
+# RUN: llvm-ifs --input-format=IFS --output-ifs=- %t/first.ifs %t/second.ifs | FileCheck %s --check-prefix=MERGED
+# RUN: llvm-ifs --input-format=IFS --output-ifs=- %t/second.ifs %t/first.ifs | FileCheck %s --check-prefix=MERGED
+# RUN: llvm-ifs --input-format=IFS --output-elf=%t/merged.stub.so %t/first.ifs %t/second.ifs
+# RUN: llvm-readobj -h --dyn-symbols %t/merged.stub.so | FileCheck %s --check-prefix=MERGED-ELF
+# RUN: not llvm-ifs --input-format=IFS --output-ifs=- %t/invalid-both.ifs 2>&1 | FileCheck %s --check-prefix=BOTH-ERR
+# RUN: not llvm-ifs --input-format=IFS --output-elf=%t/invalid.stub.so %t/invalid-both.ifs 2>&1 | FileCheck %s --check-prefix=BOTH-ERR
+
+# MERGED:      --- !ifs-v1
+# MERGED-NEXT: IfsVersion:      3.0
+# MERGED-NEXT: Target:          x86_64-unknown-linux-gnu
+# MERGED-NEXT: Symbols:
+# MERGED-NEXT:   - { Name: strong_vs_unique, Type: Object, Size: 8 }
+# MERGED-NEXT:   - { Name: unique_vs_unique, Type: Object, Size: 8, Unique: true }
+# MERGED-NEXT:   - { Name: weak_vs_unique, Type: Object, Size: 8, Unique: true }
+# MERGED-NEXT: ...
+
+# MERGED-ELF:      ElfHeader {
+# MERGED-ELF:        Ident {
+# MERGED-ELF:          OS/ABI: GNU/Linux (0x3)
+# MERGED-ELF:        }
+# MERGED-ELF:      DynamicSymbols [
+# MERGED-ELF:        Name: strong_vs_unique
+# MERGED-ELF:        Binding: Global
+# MERGED-ELF:        Name: unique_vs_unique
+# MERGED-ELF:        Binding: Unique
+# MERGED-ELF:        Name: weak_vs_unique
+# MERGED-ELF:        Binding: Unique
+# MERGED-ELF:      ]
+
+# BOTH-ERR: error: IFS symbol 'both_weak_and_unique' cannot be both Weak and Unique
+
+#--- first.ifs
+--- !ifs-v1
+IfsVersion: 3.0
+Target: x86_64-unknown-linux-gnu
+Symbols:
+  - { Name: strong_vs_unique, Type: Object, Size: 8, Unique: true }
+  - { Name: unique_vs_unique, Type: Object, Size: 8, Unique: true }
+  - { Name: weak_vs_unique, Type: Object, Size: 8, Weak: true }
+...
+
+#--- second.ifs
+--- !ifs-v1
+IfsVersion: 3.0
+Target: x86_64-unknown-linux-gnu
+Symbols:
+  - { Name: strong_vs_unique, Type: Object, Size: 8 }
+  - { Name: unique_vs_unique, Type: Object, Size: 8, Unique: true }
+  - { Name: weak_vs_unique, Type: Object, Size: 8, Unique: true }
+...
+
+#--- invalid-both.ifs
+--- !ifs-v1
+IfsVersion: 3.0
+Target: x86_64-unknown-linux-gnu
+Symbols:
+  - { Name: both_weak_and_unique, Type: Object, Size: 8, Weak: true, Unique: true }
+...

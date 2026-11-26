@@ -58,6 +58,7 @@ struct IFSSymbol {
   IFSSymbolType Type = IFSSymbolType::NoType;
   bool Undefined = false;
   bool Weak = false;
+  bool Unique = false;
   std::optional<std::string> Warning;
   bool operator<(const IFSSymbol &RHS) const { return Name < RHS.Name; }
 };

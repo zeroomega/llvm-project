@@ -34,7 +34,8 @@ Symbols:
   - { Name: sym1, Type: Object, Size: 0 }
   - { Name: sym2, Type: Func, Weak: false }
   - { Name: sym3, Type: TLS }
-  - { Name: sym4, Type: Unknown, Warning: foo }
+  - { Name: sym4, Type: Object, Size: 8, Unique: true }
+  - { Name: sym5, Type: Unknown, Warning: foo }
 ...
 ```
 
@@ -56,6 +57,7 @@ Symbols:
   - `Size`: The size of the symbol in question, doesn't apply to functions, and is optional for NoType symbols.
   - `Undefined`: Whether or not the symbol is defined in this shared object file.
   - `Weak`: Whether or not the symbol should be treated as weak.
+  - `Unique` (optional): Whether or not the symbol uses GNU unique global binding (`STB_GNU_UNIQUE`). Cannot be combined with `Weak: true`. When any symbol specifies `Unique: true`, generated ELF stubs emit `STB_GNU_UNIQUE` for unique symbols and set `EI_OSABI` to `ELFOSABI_GNU`.
   - `Warning` (optional): Warning text to output when this symbol is linked against.
 
 This YAML based text format contains everything that is needed to generate a

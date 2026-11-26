@@ -48,8 +48,10 @@ struct DynamicEntries {
 ///
 /// @param ElfHeader Target ELFT::Ehdr to populate.
 /// @param Machine Target architecture (e_machine from ELF specifications).
+/// @param OSABI Target OS/ABI (EI_OSABI from ELF specifications).
 template <class ELFT>
-static void initELFHeader(typename ELFT::Ehdr &ElfHeader, uint16_t Machine) {
+static void initELFHeader(typename ELFT::Ehdr &ElfHeader, uint16_t Machine,
+                          uint8_t OSABI = ELFOSABI_NONE) {
   memset(&ElfHeader, 0, sizeof(ElfHeader));
   // ELF identification.
   ElfHeader.e_ident[EI_MAG0] = ElfMagic[EI_MAG0];
@@ -60,7 +62,7 @@ static void initELFHeader(typename ELFT::Ehdr &ElfHeader, uint16_t Machine) {
   bool IsLittleEndian = ELFT::Endianness == llvm::endianness::little;
   ElfHeader.e_ident[EI_DATA] = IsLittleEndian ? ELFDATA2LSB : ELFDATA2MSB;
   ElfHeader.e_ident[EI_VERSION] = EV_CURRENT;
-  ElfHeader.e_ident[EI_OSABI] = ELFOSABI_NONE;
+  ElfHeader.e_ident[EI_OSABI] = OSABI;
 
   // Remainder of ELF header.
   ElfHeader.e_type = ET_DYN;
@@ -212,8 +214,17 @@ public:
     DynStr.Size = DynStr.Content.getSize();
 
     // Populate dynamic symbol table.
+    bool HasUnique = false;
     for (const IFSSymbol &Sym : Stub.Symbols) {
-      uint8_t Bind = Sym.Weak ? STB_WEAK : STB_GLOBAL;
+      assert(!(Sym.Weak && Sym.Unique) &&
+             "IFS symbol cannot be both Weak and Unique");
+      uint8_t Bind = STB_GLOBAL;
+      if (Sym.Weak) {
+        Bind = STB_WEAK;
+      } else if (Sym.Unique) {
+        Bind = STB_GNU_UNIQUE;
+        HasUnique = true;
+      }
       // For non-undefined symbols, value of the shndx is not relevant at link
       // time as long as it is not SHN_UNDEF. Set shndx to 1, which
       // points to ".dynsym".
@@ -251,7 +262,9 @@ public:
     fillStrTabShdr(ShStrTab);
 
     // Finish initializing the ELF header.
-    initELFHeader<ELFT>(ElfHeader, static_cast<uint16_t>(*Stub.Target.Arch));
+    uint8_t OSABI = HasUnique ? ELFOSABI_GNU : ELFOSABI_NONE;
+    initELFHeader<ELFT>(ElfHeader, static_cast<uint16_t>(*Stub.Target.Arch),
+                        OSABI);
     ElfHeader.e_shstrndx = ShStrTab.Index;
     ElfHeader.e_shnum = LastSection->Index + 1;
     ElfHeader.e_shoff =
@@ -517,14 +530,27 @@ static Error populateDynamic(DynamicEntries &Dyn,
 /// @param SymName The desired name of the IFSSymbol.
 /// @param RawSym ELFT::Sym to extract symbol information from.
 template <class ELFT>
-static IFSSymbol createELFSym(StringRef SymName,
-                              const typename ELFT::Sym &RawSym) {
+static Expected<IFSSymbol> createELFSym(StringRef SymName,
+                                        const typename ELFT::Sym &RawSym) {
   IFSSymbol TargetSym{std::string(SymName)};
   uint8_t Binding = RawSym.getBinding();
-  if (Binding == STB_WEAK)
-    TargetSym.Weak = true;
-  else
+  switch (Binding) {
+  case STB_GLOBAL:
     TargetSym.Weak = false;
+    break;
+  case STB_GNU_UNIQUE:
+    TargetSym.Weak = false;
+    TargetSym.Unique = true;
+    break;
+  case STB_WEAK:
+    TargetSym.Weak = true;
+    break;
+  default:
+    return createStringError(errc::not_supported,
+                             "symbol '" + SymName +
+                                 "' has unsupported binding (" +
+                                 Twine(static_cast<unsigned>(Binding)) + ")");
+  }
 
   TargetSym.Undefined = RawSym.isUndefined();
   TargetSym.Type = convertELFSymbolTypeToIFS(RawSym.st_info);
@@ -549,9 +575,8 @@ static Error populateSymbols(IFSStub &TargetStub,
                              StringRef DynStr) {
   // Skips the first symbol since it's the NULL symbol.
   for (auto RawSym : DynSym.drop_front(1)) {
-    // If a symbol does not have global or weak binding, ignore it.
-    uint8_t Binding = RawSym.getBinding();
-    if (!(Binding == STB_GLOBAL || Binding == STB_WEAK))
+    // If a symbol has local binding, ignore it.
+    if (RawSym.getBinding() == STB_LOCAL)
       continue;
     // If a symbol doesn't have default or protected visibility, ignore it.
     uint8_t Visibility = RawSym.getVisibility();
@@ -562,8 +587,10 @@ static Error populateSymbols(IFSStub &TargetStub,
     Expected<StringRef> SymName = terminatedSubstr(DynStr, RawSym.st_name);
     if (!SymName)
       return SymName.takeError();
-    IFSSymbol Sym = createELFSym<ELFT>(*SymName, RawSym);
-    TargetStub.Symbols.push_back(std::move(Sym));
+    Expected<IFSSymbol> Sym = createELFSym<ELFT>(*SymName, RawSym);
+    if (!Sym)
+      return Sym.takeError();
+    TargetStub.Symbols.push_back(std::move(*Sym));
     // TODO: Populate symbol warning.
   }
   return Error::success();
@@ -714,6 +741,12 @@ Error writeBinaryStub(StringRef FilePath, const IFSStub &Stub,
   assert(Stub.Target.Arch);
   assert(Stub.Target.BitWidth);
   assert(Stub.Target.Endianness);
+  for (const IFSSymbol &Sym : Stub.Symbols) {
+    if (Sym.Weak && Sym.Unique)
+      return createStringError(errc::invalid_argument,
+                               "IFS symbol '" + Sym.Name +
+                                   "' cannot be both Weak and Unique");
+  }
   if (Stub.Target.BitWidth == IFSBitWidthType::IFS32) {
     if (Stub.Target.Endianness == IFSEndiannessType::Little) {
       return writeELFBinaryToFile<ELF32LE>(FilePath, Stub, WriteIfChanged);

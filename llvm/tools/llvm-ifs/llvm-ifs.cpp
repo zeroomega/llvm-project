@@ -450,6 +450,15 @@ int llvm_ifs_main(int argc, char **argv, const llvm::ToolContext &) {
 
         return -1;
       }
+      if (Symbol.Unique != SI->second.Unique) {
+        // A strong global symbol (!Weak && !Unique) overrides Unique; merging
+        // Weak and Unique vague-linkage symbols preserves Unique.
+        bool HasStrong = (!Symbol.Weak && !Symbol.Unique) ||
+                         (!SI->second.Weak && !SI->second.Unique);
+        SI->second.Weak = false;
+        SI->second.Unique = !HasStrong;
+        continue;
+      }
       if (Symbol.Weak != SI->second.Weak) {
         Symbol.Weak = false;
         continue;
